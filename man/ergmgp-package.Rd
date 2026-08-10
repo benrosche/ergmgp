@@ -3,6 +3,16 @@
 \alias{ergmgp-package}
 \alias{ergmgp}
 \alias{EGP_init}
+\alias{EGP_constraints}
+\alias{EGP_engine}
+\alias{EGP_check_dots}
+\alias{EGP_process_caps}
+\alias{EGP_degree_constraints}
+\alias{EGP_MS_FREE}
+\alias{EGP_MS_DYAD}
+\alias{EGP_MS_ODEGREES}
+\alias{EGP_MS_IDEGREES}
+\alias{EGP_MS_DEGREES}
 
 \title{Tools for Modeling ERGM Generating Processes}
 

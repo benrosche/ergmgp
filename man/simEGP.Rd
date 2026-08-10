@@ -11,20 +11,22 @@ Given an \code{\link[ergm]{ergm}} formula, simulate trajectories from a continuo
 }
 
 \usage{
-simEGP(form, coef, events = 1, time = NULL, rate.factor = 1, 
-    time.offset = 0, event.offset = 0, process = c("LERGM", "CRSAOM", 
-    "CI", "DS", "CDCSTERGM", "CFCSTERGM", "CSTERGM", "CTERGM"), 
-    use.logtime = FALSE, return.changetime = FALSE, 
-    changetime.offset = NULL, return.history = FALSE, 
+simEGP(form, coef, events = 1, time = NULL, rate.factor = 1,
+    time.offset = 0, event.offset = 0, process = c("LERGM", "CRSAOM",
+    "CI", "DS", "CDCSTERGM", "CFCSTERGM", "CSTERGM", "CTERGM"),
+    constraints = NULL, engine = c("auto", "thinning", "enumeration"),
+    use.logtime = FALSE, return.changetime = FALSE,
+    changetime.offset = NULL, return.history = FALSE,
     return.networkDynamic = FALSE, verbose = TRUE,  trace.interval = 100,
     ...)
 
-simEGPTraj(form, coef, events = 1, time = NULL, checkpoints = 1, 
-    rate.factor = 1, trajectories = 1, mc.cores = 1, 
+simEGPTraj(form, coef, events = 1, time = NULL, checkpoints = 1,
+    rate.factor = 1, trajectories = 1, mc.cores = 1,
     log.sampling = FALSE, process = c("LERGM", "CRSAOM", "CI", "DS",
-    "CDCSTERGM", "CFCSTERGM", "CSTERGM", "CTERGM"), use.logtime = FALSE,
+    "CDCSTERGM", "CFCSTERGM", "CSTERGM", "CTERGM"), constraints = NULL,
+    engine = c("auto", "thinning", "enumeration"), use.logtime = FALSE,
     return.changetime = FALSE, return.history = FALSE, verbose = TRUE,
-    trace.interval = 100, statsonly = FALSE, monitor = NULL) 
+    trace.interval = 100, statsonly = FALSE, monitor = NULL)
 }
 
 \arguments{
@@ -51,6 +53,12 @@ optionally, an initial offset to the step or event count for the start of a traj
 }
   \item{process}{
 the ERGM generating process to use (described below).
+}
+  \item{constraints}{
+optionally, a one-sided formula restricting the sample space, using the same syntax as \code{\link[ergm]{ergm}}.  Not every combination of process and constraint is supported; see \sQuote{Constrained sample spaces} below, and \code{\link{EGPConstraintSupport}} for the full table.  Unsupported combinations raise an error rather than being silently ignored.
+}
+  \item{engine}{
+how to simulate the constrained process: \code{"thinning"} (exact uniformization; one change-statistic evaluation per candidate move), \code{"enumeration"} (walk the whole move set at every event), or \code{"auto"} (the default: thinning wherever the process admits it).  Both are exact; they differ only in cost.  See \sQuote{Constrained sample spaces}.
 }
   \item{use.logtime}{
 logical; internally, use logarithmic timescale?  This can potentially protect against overflow or underflow when rates are extreme, but can reduce precision and adds some overhead.
@@ -108,6 +116,27 @@ For models with extreme transition rates, the option \code{use.logtime} may be u
 Simulation itself follows the discrete event approach described in Butts (2023).  Transition hazards are computed for all edge variables (making the scaling no better then \eqn{O(N^2)} for each update, and are used to draw both the next event and the event time.  Because the cost of computing each transition is unrelated to waiting time, this algorithm can be quite efficient at simulating long time periods when events are sparse (unlike, e.g. a discrete-time algorithm that updates in every period).  By turns, however, trajectories can become quite expensive (per unit phenomenological time) when event rates are high.  This issue is especially pronounced for the \code{CRSAOM} and \code{DS} processes, which can both generate very high transition rates in some cases.  Unless otherwise specified, event histories are not stored, so storage costs are by default unrelated to trajectory length.  Care should be taken when storing event histories, as they can become quite large when transition rates are high. 
 
 To obtain equilibrium graph distributions from an EGP, it is generally (much) more efficient to use the \code{simulate} functions in the \code{\link[ergm]{ergm}} package: they employ MCMC algorithms that are unconstrained by the need to follow realistic trajectories, and that are optimized for rapid mixing.  (In particular, note that many systems can become \emph{kinetically trapped}, spending very long periods in metastable states that are far from equilibrium.  This can be a real-world phenomenon, but is not always desirable from a computational point of view.  Functions such as \code{simEGP} are intended to faithfully reproduce such dynamics, while MCMC algorithms are intended to avoid them.)  Comparison of late-phase draws from a \code{simERGMPot} trajectory with equilibrium ERGM draws can be used to evaluate convergence to equilibrium behavior (where desired); alternately, \code{simEGP} can be seeded with ERGM draws to follow trajectories from equilibrated states.  Consult the \code{ergm} package documentation for details.
+}
+
+\section{Constrained sample spaces}{
+Supplying \code{constraints} restricts the process to a subset of the graph space.  Because an EGP moves in continuous time, this is not merely a matter of rejecting illegal states: it changes what an \emph{event} is.
+
+The unconstrained processes of Butts (2023) move by toggling a single dyad.  Under a dyad-level constraint (\code{blocks}, \code{observed}, \code{fixedas}, \code{fixallbut}, \code{egocentric}, and combinations) that is still true -- the fixed dyads are simply removed from consideration -- so those constraints are supported for every process.
+
+Under a degree-preserving constraint no single toggle is legal at all, since every toggle changes a degree.  A move therefore has to become a \emph{set} of simultaneous toggles: two for \code{~odegrees} and \code{~idegrees} (rewiring an edge while holding one endpoint fixed), and four for \code{~degrees} (the tetrad or double-edge swap, mirroring \code{ergm}'s \code{CondDegreeTetrad} proposal).  The resulting process has the constrained ERGM as its equilibrium provided the rate function satisfies the usual detailed-balance form applied to the potential difference of the whole move, and the move graph is symmetric and connected on the constrained space.  This is an extension of the model class, not just of the implementation.
+
+The continuum STERGMs (\code{CSTERGM}, \code{CDCSTERGM}, \code{CFCSTERGM}) cannot be extended this way: a rewire is simultaneously a formation and a dissolution, so the potential difference admits no principled split into formation and dissolution parts and separability breaks down.  Requesting a degree constraint for these processes is an error.
+
+Two exact engines are available, differing only in cost:
+\describe{
+  \item{\code{"enumeration"}}{walks the whole legal move set at each event, exactly as the unconstrained algorithm walks all dyads.  Works for every process, but the move set has \eqn{O(E^2)} members under \code{~degrees}, and multi-toggle change statistics must be obtained by applying and rolling back the toggles (terms such as \code{gwesp} supply no joint change statistic), so this is one to two orders of magnitude slower than the unconstrained case.}
+  \item{\code{"thinning"}}{uniformization.  Where the transition rate is bounded above by a constant \eqn{\Lambda} -- true for \code{LERGM} and \code{CI} (\eqn{\Lambda = A}), and trivially for \code{DS}, whose rate does not depend on the move -- candidates are drawn uniformly from a fixed superset of the move set, and accepted with probability \eqn{rate/\Lambda}.  Rejections are self-loops: time advances, the state does not.  This is \emph{exact}, not an approximation, and costs one change-statistic evaluation per candidate instead of one per member of the move set.  It is the default wherever it applies.}
+}
+\code{DS} under a degree constraint is restricted to enumeration, because its rate involves the size of the move set, which can only be obtained by enumerating it; enumeration is cheap for \code{DS} since no change statistics are needed during the sweep.
+
+The realised constraint and engine are recorded on the returned network as the \code{"Constraint"} and \code{"Engine"} attributes; for the thinning engine, \code{"Acceptance"} gives the fraction of candidates accepted.  A low acceptance rate costs speed but never correctness.
+
+Use \code{EGPConstraintSupport} to print the full process-by-constraint table.  Any unsupported combination is an error: this function no longer accepts and ignores unrecognised arguments.
 }
 
 \value{

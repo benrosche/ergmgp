@@ -1,5 +1,5 @@
 Package: ergmgp
-Version: 0.1-2
+Version: 0.1-2.9000
 Date: 2024-10-08
 Title:  Tools for Modeling ERGM Generating Processes
 Authors@R: c(
@@ -19,3 +19,5 @@ Description:  Provides tools for simulating draws from continuous time processes
 License: GPL-3 + file LICENSE
 URL: https://statnet.org
 BugReports: https://github.com/statnet/ergmgp/issues
+Suggests:
+    testthat (>= 3.0.0)

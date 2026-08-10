@@ -11,7 +11,8 @@ Given an EGP and an initial state, calculate the transition rates to one or more
 
 \usage{
 EGPHazard(form, coef, toggles = NULL, rate.factor = 1, process = c("LERGM",
-    "CRSAOM", "CI", "DS", "CDCSTERGM", "CFCSTERGM", "CSTERGM", "CTERGM"))
+    "CRSAOM", "CI", "DS", "CDCSTERGM", "CFCSTERGM", "CSTERGM", "CTERGM"),
+    constraints = NULL)
 }
 
 \arguments{
@@ -29,6 +30,9 @@ rate or pacing factor (sets the time scale).
 }
   \item{process}{
 the ERGM generating process to use.
+}
+  \item{constraints}{
+currently unsupported, and an error if supplied.  Hazards here are per single-dyad toggle, which is the wrong unit under a degree-preserving constraint (where an event toggles two or four dyads at once) and the wrong support under a dyad-level one; returning unconstrained hazards would silently describe a different process than \code{\link{simEGP}} simulates under the same constraint.
 }
 }
 
