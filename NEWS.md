@@ -1,5 +1,40 @@
 # ergmgp 0.1-2.9000
 
+## Dyad-varying pacing: separating opportunity from preference
+
+* `simEGP()` and `simEGPTraj()` gain `rate.esp`, which generalises the scalar
+  pacing constant `rate.factor` to a dyad-varying one:
+
+      A_th = rate.factor * exp(rate.esp * ESP_th)
+
+  where `ESP_th` is the number of partners the dyad shares. Dyads with more
+  mutual contacts are *reconsidered* more often, without any change to how
+  attractive a tie between them is once considered.
+
+* **This provably does not move the equilibrium.** A modulation of the rates
+  preserves detailed balance whenever it is symmetric in the two states a
+  toggle connects, and a dyad's shared-partner count is unchanged by toggling
+  that dyad, so the modulation applies identically in both directions. The
+  limiting distribution remains exactly the ERGM implied by `form` and `coef`,
+  for any value of `rate.esp`.
+
+  This separates two mechanisms an ERGM cannot tell apart: a symmetric rate
+  modulation is an *opportunity* effect (which ties are easy to find; equilibrium
+  invariant, dynamics change), whereas a change to `coef` is a *preference*
+  effect (how attractive a tie is; equilibrium moves). The motivating case is
+  friend-recommendation systems, which alter the choice set rather than the
+  utility, and which therefore -- on this reading -- can have no equilibrium
+  effect at all, only a transient one.
+
+* `rate.esp` is restricted to undirected networks (directed shared-partner
+  counts have several inequivalent definitions) and to single-dyad moves (under
+  a degree-preserving constraint a move toggles several dyads, ESP is no longer
+  invariant, and the symmetry argument fails). Both cases are errors rather than
+  silent approximations.
+
+* Because a non-zero `rate.esp` makes the thinning bound loose, `engine="auto"`
+  selects enumeration when it is in use.
+
 ## Constrained sample spaces
 
 * `simEGP()` and `simEGPTraj()` gain a `constraints` argument, using `ergm`'s

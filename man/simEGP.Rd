@@ -15,7 +15,7 @@ simEGP(form, coef, events = 1, time = NULL, rate.factor = 1,
     time.offset = 0, event.offset = 0, process = c("LERGM", "CRSAOM",
     "CI", "DS", "CDCSTERGM", "CFCSTERGM", "CSTERGM", "CTERGM"),
     constraints = NULL, engine = c("auto", "thinning", "enumeration"),
-    use.logtime = FALSE, return.changetime = FALSE,
+    rate.esp = 0, use.logtime = FALSE, return.changetime = FALSE,
     changetime.offset = NULL, return.history = FALSE,
     return.networkDynamic = FALSE, verbose = TRUE,  trace.interval = 100,
     ...)
@@ -24,7 +24,7 @@ simEGPTraj(form, coef, events = 1, time = NULL, checkpoints = 1,
     rate.factor = 1, trajectories = 1, mc.cores = 1,
     log.sampling = FALSE, process = c("LERGM", "CRSAOM", "CI", "DS",
     "CDCSTERGM", "CFCSTERGM", "CSTERGM", "CTERGM"), constraints = NULL,
-    engine = c("auto", "thinning", "enumeration"), use.logtime = FALSE,
+    engine = c("auto", "thinning", "enumeration"), rate.esp = 0, use.logtime = FALSE,
     return.changetime = FALSE, return.history = FALSE, verbose = TRUE,
     trace.interval = 100, statsonly = FALSE, monitor = NULL)
 }
@@ -59,6 +59,9 @@ optionally, a one-sided formula restricting the sample space, using the same syn
 }
   \item{engine}{
 how to simulate the constrained process: \code{"thinning"} (exact uniformization; one change-statistic evaluation per candidate move), \code{"enumeration"} (walk the whole move set at every event), or \code{"auto"} (the default: thinning wherever the process admits it).  Both are exact; they differ only in cost.  See \sQuote{Constrained sample spaces}.
+}
+  \item{rate.esp}{
+a dyad-varying pacing factor: each edge variable's transition rate is multiplied by \code{exp(rate.esp * ESP)}, where \code{ESP} is that dyad's number of shared partners.  Zero (the default) recovers the ordinary process.  Positive values make well-embedded dyads come up for reconsideration more often without changing how attractive they are, which leaves the equilibrium untouched; see \sQuote{Opportunity versus preference} below.  Undirected, single-dyad moves only.
 }
   \item{use.logtime}{
 logical; internally, use logarithmic timescale?  This can potentially protect against overflow or underflow when rates are extreme, but can reduce precision and adds some overhead.
@@ -151,6 +154,29 @@ The size of that tilt is computable rather than merely bounded, since \eqn{\pi_{
 The realised constraint and engine are recorded on the returned network as the \code{"Constraint"} and \code{"Engine"} attributes; for the thinning engine, \code{"Acceptance"} gives the fraction of candidates accepted.  A low acceptance rate costs speed but never correctness.
 
 Use \code{EGPConstraintSupport} to print the full process-by-constraint table.  Any unsupported combination is an error: this function no longer accepts and ignores unrecognised arguments.
+}
+
+\section{Opportunity versus preference}{
+\code{rate.factor} is a scalar pacing constant: it sets the timescale, but is the same for every edge variable.  \code{rate.esp} generalises it to a \emph{dyad-varying} pacing factor,
+\deqn{A_{th} = A \exp(\lambda\, \mathrm{ESP}_{th}),}
+where \eqn{\mathrm{ESP}_{th}} is the number of partners \eqn{t} and \eqn{h} share and \eqn{\lambda} is \code{rate.esp}.  Well-embedded dyads are then \emph{reconsidered} more often, without any change to how attractive a tie between them is once considered.
+
+\strong{This does not move the equilibrium.}  A modulation \eqn{s} of the rates preserves detailed balance whenever \eqn{s(x,y) = s(y,x)}, and \eqn{\mathrm{ESP}_{th}} is unchanged by toggling \eqn{(t,h)} -- a dyad is not part of its own shared-partner count -- so the modulation applies identically in both directions:
+\deqn{\pi(x) r'(x \to y) = s\,\pi(x) r(x \to y) = s\,\pi(y) r(y \to x) = \pi(y) r'(y \to x).}
+The limiting distribution is therefore exactly the ERGM implied by \code{form} and \code{coef}, for any \eqn{\lambda}.
+
+That gives a clean separation between two things an ERGM cannot tell apart:
+\describe{
+  \item{\emph{opportunity}}{a symmetric rate modulation (\code{rate.esp}).  Changes which ties are easy to \emph{find}.  The equilibrium is invariant; only the dynamics and the timescale move.}
+  \item{\emph{preference}}{a change to \code{coef}.  Changes how attractive a tie is.  The equilibrium moves.}
+}
+The motivating case is friend-recommendation systems (\dQuote{people you may know}), which surface friends-of-friends: they alter the choice set rather than the utility.  Modelled as \code{rate.esp}, such a system provably cannot change the equilibrium level of any network statistic, however large \eqn{\lambda} is -- so any effect it has is a transient one, invisible to equilibrium analysis.  Modelled as an increase in a closure coefficient, it changes the equilibrium instead.  Which of the two is the better description is an empirical question, and the two make different predictions.
+
+Restrictions, both of which are correctness requirements rather than conveniences.  \code{rate.esp} is available only for undirected networks, because shared-partner counts have several inequivalent directed analogues and choosing one silently would be a modelling decision.  And it is available only for single-dyad moves: under a degree-preserving constraint a move toggles several dyads at once, altering the neighbourhoods of the dyads involved, so \eqn{\mathrm{ESP}} is no longer invariant, the symmetry argument fails, and the equilibrium would silently cease to be the specified ERGM.  Both cases raise an error.
+
+Two practical points.  A non-zero \code{rate.esp} makes the thinning bound loose, since it must assume the most-connected dyad; \code{engine="auto"} therefore selects enumeration when \code{rate.esp} is non-zero.
+
+More importantly, \code{rate.esp} rescales the clock.  Raising every embedded dyad's rate raises the total event rate by roughly \eqn{\exp(\lambda \bar{L})}, where \eqn{\bar{L}} is the mean shared-partner count, so a run to a given \code{time} draws proportionately more events and costs proportionately more.  Comparing a modulated run against an unmodulated one at equal \code{time} is statistically the right comparison -- both approach the same equilibrium, the modulated one faster -- but the modulated arm may do an order of magnitude more work.  Budget accordingly, or compare at equal \code{events} when only the embedded jump chain is of interest.
 }
 
 \value{

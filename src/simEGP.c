@@ -26,6 +26,58 @@
 #include "moveset.h"
 
 /*
+  Number of shared partners of the dyad (t,h): the count of k adjacent to both.
+
+  Note that this does not depend on the state of the (t,h) edge variable itself,
+  only on t's and h's other ties.  That is what makes it usable as a rate
+  modulator without disturbing the equilibrium (see rate_esp_mod below).
+*/
+static double esp_count(Vertex t, Vertex h, Network *nwp){
+  double c = 0.0;
+  /*Walk the neighbours of whichever endpoint has fewer of them*/
+  Vertex a = (DEG(t) <= DEG(h)) ? t : h, b = (a == t) ? h : t;
+  EXEC_THROUGH_EDGES(a, e, k, {
+    if(k != b && IS_UNDIRECTED_EDGE(k, b)) c++;
+  });
+  return c;
+}
+
+/*
+  Dyad-varying pacing ("search") term.
+
+  ergmgp's rate.factor A is a scalar pacing constant: it sets the timescale but
+  is the same for every edge variable.  This generalises it to a dyad-varying
+  pacing factor
+
+      A_th = A * exp(lambda * ESP_th),
+
+  i.e. dyads with more shared partners are *reconsidered* more often.  It is
+  motivated by friend-recommendation systems ("people you may know"), which
+  surface friends-of-friends: they change how readily a dyad comes up for
+  decision, not how attractive it is once it does.
+
+  The equilibrium is untouched.  Writing the modulation as s(x,y), the toggled
+  process satisfies detailed balance whenever s(x,y)=s(y,x), and ESP_th is
+  literally unchanged by toggling (t,h) -- the t-h edge is not part of its own
+  shared-partner count -- so s is symmetric by construction.  Hence
+
+      pi(x) r'(x->y) = s pi(x) r(x->y) = s pi(y) r(y->x) = pi(y) r'(y->x).
+
+  This gives a clean separation: a symmetric modulation is a pure *opportunity*
+  effect and leaves the ERGM equilibrium exactly where it was, whereas changing
+  a model coefficient is a *preference* effect and moves it.  Only the dynamics
+  distinguish the two.
+
+  Restricted to single-toggle moves: for a multi-dyad move the reverse move
+  changes the neighbourhoods of the dyads involved, so ESP is no longer
+  invariant and symmetry -- hence the equilibrium -- would be lost.
+*/
+static double rate_esp_mod(double resp, const Move *mv, Network *nwp){
+  if(resp == 0.0 || mv->ntoggles != 1) return 0.0;
+  return resp * esp_count(mv->tails[0], mv->heads[0], nwp);
+}
+
+/*
   Compute the change statistics, relative potential, and log transition rate
   for a single move.
 
@@ -43,8 +95,11 @@
 static double score_move(const Move *mv, int egp, Model *m, Network *nwp,
                          double *coef, int cooffset, double lcrate,
                          double lHneigh, const double *pot, double *relpot,
-                         double *newRow){
+                         double *newRow, double resp){
   int j;
+  /*Dyad-varying pacing: shifts every rate for this move by the same amount,
+    symmetrically in the two states, so the equilibrium is unaffected.*/
+  lcrate += rate_esp_mod(resp, mv, nwp);
   relpot[0] = relpot[1] = 0.0;
   memset(newRow, 0.0, m->n_stats*sizeof(double));
   if(mv->ntoggles == 1){
@@ -110,7 +165,15 @@ static double score_move(const Move *mv, int egp, Model *m, Network *nwp,
   advance time without changing state.  Returns R_PosInf when no bound
   exists, in which case the caller must enumerate instead.
 */
-static double rate_bound(int egp, double lcrate, double lHneigh, const double *pot){
+static double rate_bound(int egp, double lcrate, double lHneigh, const double *pot,
+                         double resp, Network *nwp){
+  if(resp != 0.0){
+    /*ESP_th <= min(deg t, deg h) <= max degree, so this bounds the modulation.
+      It is valid but loose, which is why "auto" prefers enumeration here.*/
+    double mx = 0.0;
+    for(Vertex v = 1; v <= N_NODES; v++) if(DEG(v) > mx) mx = DEG(v);
+    lcrate += (resp > 0.0) ? resp * mx : 0.0;
+  }
   switch(egp){
     case EGP_LERGM: return lcrate;                       /*A/(1+exp(-d)) <= A*/
     case EGP_CI:    return lcrate;                       /*A*min(1,exp(d)) <= A*/
@@ -183,9 +246,9 @@ static double rate_bound(int egp, double lcrate, double lHneigh, const double *p
                sender, receiver, time, and formation indicator (1=onset, 0=terminus)
       proposals: number of candidate moves drawn (thinning engine only)
 */
-SEXP simEGP_R(SEXP segp, SEXP mstate, SEXP scoef, SEXP scooffset, SEXP stmax, SEXP sevmax, SEXP slcrate, SEXP spot, SEXP slogtime, SEXP slasttog, SEXP slttoff, SEXP skeephist, SEXP sverbose, SEXP sfamily, SEXP srledyads, SEXP sthin){
+SEXP simEGP_R(SEXP segp, SEXP mstate, SEXP scoef, SEXP scooffset, SEXP stmax, SEXP sevmax, SEXP slcrate, SEXP spot, SEXP slogtime, SEXP slasttog, SEXP slttoff, SEXP skeephist, SEXP sverbose, SEXP sfamily, SEXP srledyads, SEXP sthin, SEXP sresp){
   int pc=0,verbose,i,j,egp,cooffset,logtime,lasttog,keephist,family,thin;
-  double *coef,tmax,evmax,lcrate,ecount,simtime,pot[2],lHneigh,*ltt,*dp,*rledyads;
+  double *coef,tmax,evmax,lcrate,ecount,simtime,pot[2],lHneigh,*ltt,*dp,*rledyads,resp;
   double tm,relpot[2],ltotrat=R_NegInf,selpot[2];
   double ncand=0.0,propcount=0.0;
   double *pehist,*pdp;
@@ -238,6 +301,9 @@ SEXP simEGP_R(SEXP segp, SEXP mstate, SEXP scoef, SEXP scooffset, SEXP stmax, SE
   UNPROTECT(1);
   PROTECT(sthin=coerceVector(sthin,INTSXP));         /*Thinning engine?*/
   thin=INTEGER(sthin)[0];
+  UNPROTECT(1);
+  PROTECT(sresp=coerceVector(sresp,REALSXP));        /*Dyad-varying pacing (ESP)*/
+  resp=REAL(sresp)[0];
   UNPROTECT(1);
   if(srledyads==R_NilValue){
     rledyads=NULL;
@@ -338,7 +404,7 @@ SEXP simEGP_R(SEXP segp, SEXP mstate, SEXP scoef, SEXP scooffset, SEXP stmax, SE
         and costs one change-statistic evaluation per candidate rather
         than one per member of the move set.
         ----------------------------------------------------------------*/
-      double lLambda=rate_bound(egp, lcrate, lHneigh, pot);
+      double lLambda=rate_bound(egp, lcrate, lHneigh, pot, resp, nwp);
       ncand=MoveSetSupersetSize(ms, nwp);
       if(!R_FINITE(lLambda)||ncand<=0.0){
         error("Internal error: the thinning engine was invoked for a process with no rate bound, or an empty move set.  Please report this.\n");
@@ -352,7 +418,7 @@ SEXP simEGP_R(SEXP segp, SEXP mstate, SEXP scoef, SEXP scooffset, SEXP stmax, SE
       if(tm>=tmax) break;
       propcount++;
       if(MoveSetSample(ms, nwp, &mv)){
-        double lrate=score_move(&mv, egp, m, nwp, coef, cooffset, lcrate, lHneigh, pot, relpot, newRow);
+        double lrate=score_move(&mv, egp, m, nwp, coef, cooffset, lcrate, lHneigh, pot, relpot, newRow, resp);
         /*Accept with probability rate/Lambda*/
         if(log(unif_rand())<lrate-lLambda){
           selmv=mv;
@@ -388,7 +454,7 @@ SEXP simEGP_R(SEXP segp, SEXP mstate, SEXP scoef, SEXP scooffset, SEXP stmax, SE
         lHneigh=log(nmoves);
         ltotrat=lcrate-pot[0];   /*= nmoves * A/(|H| exp(pot)) with |H|=nmoves*/
         if(havemove)
-          score_move(&selmv, egp, m, nwp, coef, cooffset, lcrate, lHneigh, pot, selpot, newRow);
+          score_move(&selmv, egp, m, nwp, coef, cooffset, lcrate, lHneigh, pot, selpot, newRow, resp);
       }else{
         double selmax=R_NegInf,lmax=R_NegInf;
         double nmoves=0.0;
@@ -397,7 +463,7 @@ SEXP simEGP_R(SEXP segp, SEXP mstate, SEXP scoef, SEXP scooffset, SEXP stmax, SE
             walking a cumulative sum, rather than paying two logarithms per
             move for a Gumbel draw.*/
           while(MoveIterNext(&it, &mv)){
-            double lrate=score_move(&mv, egp, m, nwp, coef, cooffset, lcrate, lHneigh, pot, relpot, newRow);
+            double lrate=score_move(&mv, egp, m, nwp, coef, cooffset, lcrate, lHneigh, pot, relpot, newRow, resp);
             lrates[mv.tails[0]-1+(mv.heads[0]-1)*n_nodes]=lrate;
             if(lrate>lmax) lmax=lrate;
             nmoves++;
@@ -418,13 +484,13 @@ SEXP simEGP_R(SEXP segp, SEXP mstate, SEXP scoef, SEXP scooffset, SEXP stmax, SE
           }
           if(!havemove){ selmv=mv; havemove=1; }  /*Rounding guard*/
           /*Recover the winner's potential difference (one extra evaluation)*/
-          score_move(&selmv, egp, m, nwp, coef, cooffset, lcrate, lHneigh, pot, selpot, newRow);
+          score_move(&selmv, egp, m, nwp, coef, cooffset, lcrate, lHneigh, pot, selpot, newRow, resp);
         }else{
           /*Large move set: select by the Gumbel-max trick, which needs no
             storage.  We draw a Gumbel(0) deviate for each move and take the
             arg max of log(rate) + G, which can be done as we go.*/
           while(MoveIterNext(&it, &mv)){
-            double lrate=score_move(&mv, egp, m, nwp, coef, cooffset, lcrate, lHneigh, pot, relpot, newRow);
+            double lrate=score_move(&mv, egp, m, nwp, coef, cooffset, lcrate, lHneigh, pot, relpot, newRow, resp);
             ltotrat=logspace_add(ltotrat,lrate);
             double selval=lrate-log(-log(runif(0.0,1.0)));
             if(selval>selmax){

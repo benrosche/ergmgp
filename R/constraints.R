@@ -180,6 +180,38 @@ EGP_check_dots<-function(...){
 }
 
 
+#Validate the dyad-varying pacing factor.
+#
+#rate.esp multiplies each dyad's transition rate by exp(rate.esp * ESP), where
+#ESP is the dyad's number of shared partners.  Because ESP of a dyad does not
+#depend on the state of that dyad's own edge variable, the modulation is
+#symmetric between the two states it connects, and so it leaves the ERGM
+#equilibrium exactly where it was: it is a pure *opportunity* (search) effect,
+#as distinct from changing a coefficient, which is a *preference* effect and
+#does move the equilibrium.
+#
+#The symmetry argument is what constrains where this can be used, so the
+#restrictions below are correctness requirements, not conveniences.
+EGP_check_rate_esp<-function(rate.esp, con, nw){
+  if(is.null(rate.esp)||length(rate.esp)!=1L||!is.finite(rate.esp))
+    stop("`rate.esp` must be a single finite number (0 disables it).")
+  if(rate.esp==0) return(invisible(NULL))
+  if(is.directed(nw))
+    stop("`rate.esp` is defined for undirected networks only.\n",
+         "  Shared-partner counts have several inequivalent directed analogues (OTP, ITP,\n",
+         "  OSP, ISP) and picking one silently would be a modelling decision, not a default.")
+  if(con$ntoggles!=1L)
+    stop("`rate.esp` cannot be combined with the constraint ",con$label,".\n",
+         "  It is only equilibrium-preserving for single-dyad moves: a dyad's shared-partner\n",
+         "  count is unchanged by toggling that dyad, which is what makes the rate\n",
+         "  modulation symmetric.  A multi-dyad move (",con$ntoggles," toggles) alters the\n",
+         "  neighbourhoods of the dyads involved, so ESP is no longer invariant, symmetry\n",
+         "  fails, and the process would no longer have the specified ERGM equilibrium.\n",
+         "  Use rate.esp with an unconstrained or dyad-level-constrained process.")
+  invisible(NULL)
+}
+
+
 #Parse and validate a constraint formula for a given process.
 #
 #Arguments:
