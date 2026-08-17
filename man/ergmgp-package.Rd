@@ -7,6 +7,7 @@
 \alias{EGP_engine}
 \alias{EGP_check_dots}
 \alias{EGP_process_caps}
+\alias{EGP_fixedH}
 \alias{EGP_moveset_constraints}
 \alias{EGP_MS_FREE}
 \alias{EGP_MS_DYAD}
