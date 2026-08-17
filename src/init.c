@@ -14,8 +14,8 @@
 /*The package's .Call entry points.  Declared here rather than in a header
   because the registration table below is their only other reference, and it
   is the one place their arity is recorded.*/
-extern SEXP simEGP_R(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP,
-                     SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP simEGP_R(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP,
+                     SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP EGPHazard_R(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 
 static const R_CMethodDef CEntries[] = {
@@ -29,7 +29,7 @@ static const R_CMethodDef CEntries[] = {
   singularly unpleasant thing to debug.  Keep the counts here in step with the
   signatures above.*/
 static const R_CallMethodDef CallEntries[] = {
-    {"simEGP_R",    (DL_FUNC) &simEGP_R,    16},
+    {"simEGP_R",    (DL_FUNC) &simEGP_R,    18},
     {"EGPHazard_R", (DL_FUNC) &EGPHazard_R,  8},
     {NULL, NULL, 0}
 };
