@@ -36,6 +36,40 @@ EGP_MS_EDGES    <- 5L   #2 toggles (one edge out, one non-edge in; edge count
 EGP_MS_MULTITOG <- EGP_MS_ODEGREES
 
 
+#Does the number of *legal* moves take the same value in every state the
+#process can reach?
+#
+#This matters for one process only.  DS's rate is A/(|H| exp(pot)), so its total
+#exit rate is A exp(-pot) and its jump chain is uniform over the |H| legal
+#moves.  The move graph is symmetric, so that jump chain has stationary
+#distribution nu(x) proportional to |H|(x), and for a CTMC pi = nu/q, giving
+#
+#    pi_DS(x)  proportional to  |H|(x) exp(pot(x))
+#
+#which is the intended ERGM if and only if |H| is constant.  Counting the moves
+#each family enumerates (see MoveIterNext in src/moveset.c):
+#
+#  MS_FREE       all dyads                                   D
+#  MS_DYAD       the free dyads                              |free|
+#  MS_EDGES      (edge, non-edge) pairs                      E(D - E)
+#  MS_ODEGREES   (edge, new head) pairs                      sum_t d_t(n - 1 - d_t)
+#  MS_IDEGREES   (edge, new tail) pairs                      sum_h d_h(n - 1 - d_h)
+#  MS_DEGREES    node-disjoint edge pairs whose two
+#                re-pairings are both currently absent       state-dependent
+#
+#Every count but the last is fixed by exactly what its constraint holds fixed,
+#so |H| cannot move.  This survives composition with a dyad-level constraint:
+#frozen dyads never toggle, so the free edges and free non-edges at each node
+#are themselves constant, and the products above just run over the free part.
+#
+#The tetrad is different in kind.  It is legal only if the two dyads it would
+#*form* are currently absent, which is a fact about the configuration and not
+#about the degree sequence -- so |H| genuinely varies (250-310 over equilibrium
+#draws from a 14-node, 28-edge model), and DS under ~degrees equilibrates to a
+#distribution tilted by |H| rather than to the ERGM.
+EGP_fixedH<-function(family) family!=EGP_MS_DEGREES
+
+
 #Which constraints does ergmgp know how to turn into a move set?
 #
 #These are the count-preserving constraints: each fixes some function of the
@@ -88,15 +122,23 @@ EGPConstraintSupport<-function(process=NULL){
     cap<-EGP_process_caps[[p]]
     do.call(rbind,lapply(seq_along(cons),function(i){
       multi<-fams[i]>=EGP_MS_MULTITOG
-      supported<-(!multi)||cap$multitog
-      #DS is a special case: its rate involves the size of the move set, which
-      #for a multi-toggle family can only be had by enumerating it, so thinning
-      #is unavailable there however bounded the rate is.
+      #Two independent reasons a cell can be unsupported, and they want
+      #different notes: separability (the continuum STERGMs, under any
+      #multi-toggle move) and a state-dependent move count (DS, under ~degrees
+      #only -- see EGP_fixedH).
+      nosep<-multi && !cap$multitog
+      novH <-p=="DS" && !EGP_fixedH(fams[i])
+      supported<-!nosep && !novH
+      #DS is a special case for the engine too: its rate involves the size of
+      #the move set, which for a multi-toggle family can only be had by
+      #enumerating it, so thinning is unavailable there however bounded the
+      #rate is.
       thin<-cap$thin && !(p=="DS" && multi)
       data.frame(process=p, constraint=cons[i],
                  supported=supported,
                  engine=if(!supported) "-" else if(thin) "thinning (exact)" else "enumeration",
-                 note=if(!supported) "multi-toggle moves break formation/dissolution separability"
+                 note=if(nosep) "multi-toggle moves break formation/dissolution separability"
+                      else if(novH) "|H| varies by state, so the equilibrium would be |H|exp(pot)"
                       else if(!multi) ""
                       else if(thin) paste0("rate bound = ",cap$bound)
                       else if(p=="DS") "rate needs the move count, so it must be enumerated (cheaply)"
@@ -218,6 +260,21 @@ EGP_constraints<-function(constraints, nw, proc){
            "dissolution, so the\n  potential difference has no principled split into formation and ",
            "dissolution parts\n  and separability breaks down.  Use LERGM, CI, DS, CRSAOM or CTERGM, ",
            "or restrict\n  yourself to dyad-level constraints.  See EGPConstraintSupport().")
+    #DS is refused where the legal-move count varies by state, because there its
+    #equilibrium is not the ERGM the caller specified.  See EGP_fixedH above for
+    #the counting argument and for why ~degrees is the only such case.
+    if(proc=="DS" && !EGP_fixedH(spec$family))
+      stop("Process DS cannot be simulated under ~",cntcon,".\n",
+           "  DS's rate is A/(|H|exp(pot)), so its jump chain is uniform over the |H| legal\n",
+           "  moves and its total exit rate is A exp(-pot).  Its equilibrium is therefore\n",
+           "  proportional to |H|(x)exp(pot(x)), which is the requested ERGM only when |H| is\n",
+           "  constant.  A tetrad is legal only if the two dyads it would form are absent, so\n",
+           "  under ~",cntcon," |H| varies with the configuration and the equilibrium is tilted\n",
+           "  towards states with more legal moves.  Simulating it would return draws from a\n",
+           "  distribution that is not the one specified by `coef`.\n",
+           "  DS is exact under every other constraint (|H| is fixed by the constraint\n",
+           "  itself there), so use ~edges, ~odegrees, ~idegrees or a dyad-level constraint;\n",
+           "  or use LERGM or CI, which are exact under ~",cntcon,".")
     family<-spec$family; ntog<-spec$ntoggles; label<-paste0("~",cntcon)
   }
 

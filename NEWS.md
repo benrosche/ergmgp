@@ -68,6 +68,45 @@
   formation and a dissolution, so the potential difference admits no principled
   split into formation and dissolution parts.
 
+* **`DS` refuses `~degrees`**, and unlike the other refusals this one is about
+  correctness rather than about what the code can express. The
+  differential-stability rate is `A/(|H| exp(pot))`, so the total exit rate is
+  `A exp(-pot)` and the embedded jump chain is uniform over the `|H|` legal
+  moves. The move graph is symmetric, so that jump chain's stationary
+  distribution is proportional to `|H|(x)`, and `pi = nu/q` for a
+  continuous-time chain — hence `DS` equilibrates to `|H|(x) exp(pot(x))`,
+  which is the requested ERGM exactly when `|H|` is constant.
+
+  It is constant almost everywhere: `E(D-E)` moves under `~edges`,
+  `sum_t d_t(n-1-d_t)` under the rewire constraints, the dyad count or the free
+  dyad count for the single-toggle families — each pinned by whatever the
+  constraint itself pins, and unchanged by composing with a dyad-level
+  constraint, since frozen dyads never move. `~degrees` is the exception, and
+  for a reason specific to the tetrad: it is legal only when the two dyads it
+  would *form* are currently absent, which is a fact about the configuration
+  and not about the degree sequence. On a 14-node, 28-edge model the count
+  ranges over 250–310 across equilibrium draws, tilting the equilibrium towards
+  states that offer more moves. Rather than return draws from a model other
+  than the one `coef` specifies, the combination is an error. `LERGM` and `CI`
+  are unaffected: their rates depend on the move, not on how many moves exist.
+
+  The tilt is small, and shrinks fast: since it is exactly a reweighting by
+  `|H|`, its size can be computed rather than simulated, and at fixed mean
+  degree the shift in a gwesp statistic falls as roughly `n^-1.1` in absolute
+  terms and `n^-1.65` relative — 0.09% of the statistic at n=14, 0.001% at
+  n=200 — with raising the density damping it further. `|H|` is a count of
+  order `E^2` whose random part is only the blocked re-pairings, of order `E^2`
+  times the density, so its relative fluctuation dies quickly. This is a reason
+  to state the magnitude, not a reason to allow the combination: the process
+  does not have the equilibrium the package says it has, and the discrepancy is
+  largest in exactly the small, sparse regime where a user is most likely to be
+  checking an equilibrium against an exact calculation.
+
+  There is no version of this that keeps `DS` as `DS`. Dropping the `1/|H|`
+  restores detailed balance but destroys the property that defines the
+  process — the exit rate would then depend on the number of available moves
+  rather than on the potential alone.
+
 * A constraint that leaves no free dyads is an error rather than a simulation
   in which no event can ever occur.
 
@@ -90,3 +129,11 @@
   exactly the marginal `~degrees` pins and `~edges` frees, and so the one a
   wrong 2-toggle move set could get wrong while still reproducing the model
   terms.
+
+  A separate test covers `DS` under `~edges`, the constrained case its rate is
+  still exact for. It has to be written differently from the others: it
+  terminates on time rather than on events, because `DS`'s jump chain is
+  uniform over the legal moves and so carries no model information — an
+  `events=` endpoint returns near-uniform draws whatever `coef` says — and it
+  starts each run from a draw from the target, so what is tested is that the
+  process preserves the distribution.

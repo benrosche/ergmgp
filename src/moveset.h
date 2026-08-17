@@ -47,6 +47,16 @@
   event changes more than one edge variable.*/
 #define MS_MULTITOG  MS_ODEGREES
 
+/*A property of these families that one process depends on: whether the number
+  of *legal* moves is the same in every reachable state.  Counting what
+  MoveIterNext walks, it is E(D-E) for MS_EDGES and sum_t d_t(n-1-d_t) for the
+  rewire families -- fixed by exactly what those constraints hold fixed -- but
+  state-dependent for MS_DEGREES, since a tetrad is legal only if the two dyads
+  it would form happen to be absent.  DS's rate carries 1/|H|, so it has the
+  requested ERGM as its equilibrium only where that count is constant; the
+  refusal for MS_DEGREES lives in EGP_fixedH() in R/constraints.R.  Keep the two
+  in step if a family is added.*/
+
 #define MOVE_MAXTOG  4
 
 /*A single move: a set of dyads to toggle simultaneously.*/

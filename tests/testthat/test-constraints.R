@@ -81,8 +81,22 @@ test_that("unsupported process/constraint combinations are refused explicitly", 
   #DS needs the move count, so it cannot be thinned under a count-preserving
   #constraint
   expect_error(simEGP(f, coef = c(-2, .4), events = 5, process = "DS",
-                      constraints = ~degrees, engine = "thinning", verbose = FALSE),
+                      constraints = ~edges, engine = "thinning", verbose = FALSE),
                "not available for DS")
+  #...and under ~degrees the move count is not merely unknown but state
+  #dependent, which moves DS's equilibrium off the requested ERGM, so the
+  #combination is refused whatever engine is asked for
+  for(eng in c("auto", "thinning", "enumeration"))
+    expect_error(simEGP(f, coef = c(-2, .4), events = 5, process = "DS",
+                        constraints = ~degrees, engine = eng, verbose = FALSE),
+                 "DS cannot be simulated under ~degrees", fixed = TRUE)
+  #The refusal is specific to the process and to the constraint, not general to
+  #either: DS runs under the other count-preserving constraints, and the other
+  #processes run under ~degrees.
+  expect_s3_class(simEGP(f, coef = c(-2, .4), events = 5, process = "DS",
+                         constraints = ~edges, verbose = FALSE), "network")
+  expect_s3_class(simEGP(f, coef = c(-2, .4), events = 5, process = "CI",
+                         constraints = ~degrees, verbose = FALSE), "network")
   #Directedness mismatches
   expect_error(simEGP(f, coef = c(-2, .4), events = 5, process = "LERGM",
                       constraints = ~odegrees, verbose = FALSE))
@@ -232,4 +246,55 @@ test_that("the constrained equilibrium matches ergm::simulate", {
     z <- (colMeans(A) - colMeans(B)) / se
     expect_lt(max(abs(z)), 4, label = deparse(cs$con))
   }
+})
+
+
+test_that("DS keeps the constrained ERGM where the move count is fixed", {
+  #The other half of refusing DS under ~degrees: the claim that it is exact
+  #wherever the constraint pins |H|, here ~edges, where |H| = E(D-E).
+  #
+  #Two things make this test unlike the one above.  It must terminate on TIME:
+  #DS's rate does not depend on which move is taken, so its jump chain is
+  #uniform over the legal moves and carries no model information at all, and an
+  #events= endpoint would return draws that are near-uniform over the reachable
+  #states however the coefficients are set.  The model enters only through the
+  #holding times.  And it starts each run *from* the target rather than from
+  #nw, so what is being tested is whether the process preserves the
+  #distribution -- which is the property at issue -- with no burn-in to argue
+  #about.  DS's exit rate is A exp(-pot), so the pacing constant has to undo
+  #exp(pot) or nothing happens in any reachable amount of time.
+  skip_on_cran()
+  nw <- undirected_net()
+  co <- c(0.6, 0.5)
+  f <- nw ~ gwesp(0.3, fixed = TRUE) + nodematch("sex")
+  mono <- function(x)
+    summary(x ~ gwesp(0.3, fixed = TRUE) + nodematch("sex") + degree(2))
+  target <- function(){
+    suppressMessages(simulate(f, coef = co, constraints = ~edges, nsim = 1,
+                              control = control.simulate.formula(MCMC.burnin = 20000),
+                              output = "network"))
+  }
+  reps <- 200
+  set.seed(7)
+  A <- t(vapply(1:reps, function(i){
+    d <- target()
+    rf <- exp(sum(co * summary(d ~ gwesp(0.3, fixed = TRUE) + nodematch("sex"))))
+    s <- simEGP(d ~ gwesp(0.3, fixed = TRUE) + nodematch("sex"), coef = co,
+                time = 100, rate.factor = rf, process = "DS",
+                constraints = ~edges, verbose = FALSE)
+    c(mono(s), s %n% "Events")
+  }, numeric(4)))
+  set.seed(11)
+  B <- t(vapply(1:reps, function(i) mono(target()), numeric(3)))
+  se <- sqrt(apply(A[, 1:3], 2, var)/reps + apply(B, 2, var)/reps)
+  expect_lt(max(abs((colMeans(A[, 1:3]) - colMeans(B)) / se)), 4)
+  #Guard against the run being vacuous, which is how this test would silently
+  #stop testing anything -- but in aggregate, because no per-run floor is
+  #achievable here.  The exit rate is A exp(-pot) and the potential spans about
+  #ten nats across the target, so the event count per unit time spans four
+  #orders of magnitude; pacing hard enough to put a floor under the slowest
+  #draw makes the fastest one run for millions of events.  A run that barely
+  #moves costs power, not validity: its endpoint is still a draw from the
+  #target, which is exactly the null being tested.
+  expect_gt(median(A[, 4]), 100)
 })
