@@ -28,9 +28,19 @@
 
 * `rate.esp` is restricted to undirected networks (directed shared-partner
   counts have several inequivalent definitions) and to single-dyad moves (under
-  a degree-preserving constraint a move toggles several dyads, ESP is no longer
+  a count-preserving constraint a move toggles several dyads, ESP is no longer
   invariant, and the symmetry argument fails). Both cases are errors rather than
   silent approximations.
+
+  The second restriction covers `~edges` as well as the degree constraints: the
+  edge an `~edges` swap dissolves may itself be part of the formed dyad's
+  shared-partner count, so the modulation differs between the two states the
+  move connects. A symmetric generalisation exists — the modulation would have
+  to be a function of the *unordered* pair of toggled dyads and of the rest of
+  the graph, e.g. the mean shared-partner count of the dissolved and formed
+  dyads computed with both deleted — but several inequivalent such functions
+  exist, so ergmgp does not choose one for you. A design wanting both a fixed
+  edge count and an opportunity effect has to specify that choice itself.
 
 * Because a non-zero `rate.esp` makes the thinning bound loose, `engine="auto"`
   selects enumeration when it is in use.
@@ -64,6 +74,9 @@
   different move shape. `~edges + degrees` is not such a conflict: fixing every
   degree fixes their sum, and `ergm` drops the redundant term before ergmgp sees
   it.
+
+  `rate.esp` remains unavailable under `~edges`, for the same reason it is
+  unavailable under `~degrees` — see below.
 
 * New `EGPConstraintSupport()` prints the full process-by-constraint table,
   saying for each combination whether it is supported, which engine is used,

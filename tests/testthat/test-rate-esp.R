@@ -18,10 +18,14 @@ esp_net <- function(n = 24, nedge = 60, seed = 1){
 test_that("rate.esp is refused where the symmetry argument does not hold", {
   nw <- esp_net()
   f <- nw ~ edges + gwesp(0.3, fixed = TRUE)
-  #Multi-dyad moves: ESP is not invariant, so the modulation is not symmetric
-  expect_error(simEGP(f, coef = c(-2, .4), events = 5, process = "LERGM",
-                      constraints = ~degrees, rate.esp = 0.5, verbose = FALSE),
-               "single-dyad moves")
+  #Multi-dyad moves: ESP is not invariant, so the modulation is not symmetric.
+  #This holds for the 2-toggle ~edges swap as much as for the ~degrees tetrad --
+  #the dissolved edge is part of the formed dyad's neighbourhood in one state
+  #and not the other -- so both are refused.
+  for(con in list(~degrees, ~edges))
+    expect_error(simEGP(f, coef = c(-2, .4), events = 5, process = "LERGM",
+                        constraints = con, rate.esp = 0.5, verbose = FALSE),
+                 "single-dyad moves", label = deparse(con))
   #Directed: shared-partner count is ambiguous
   nd <- network.initialize(12, directed = TRUE)
   nd <- add.edges(nd, c(1,2,3,4), c(2,3,4,5))

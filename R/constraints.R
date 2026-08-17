@@ -207,7 +207,12 @@ EGP_check_rate_esp<-function(rate.esp, con, nw){
          "  modulation symmetric.  A multi-dyad move (",con$ntoggles," toggles) alters the\n",
          "  neighbourhoods of the dyads involved, so ESP is no longer invariant, symmetry\n",
          "  fails, and the process would no longer have the specified ERGM equilibrium.\n",
-         "  Use rate.esp with an unconstrained or dyad-level-constrained process.")
+         "  Use rate.esp with an unconstrained or dyad-level-constrained process.\n",
+         "  (A symmetric generalisation to multi-dyad moves does exist -- the modulation\n",
+         "  would have to be a function of the *unordered* set of toggled dyads and of the\n",
+         "  rest of the graph, e.g. the mean shared-partner count of the dissolved and\n",
+         "  formed dyads computed with both deleted -- but which one to use is a modelling\n",
+         "  choice, so ergmgp does not pick one for you.)")
   invisible(NULL)
 }
 
