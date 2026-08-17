@@ -84,10 +84,16 @@ test_that("rate.esp changes the dynamics", {
 })
 
 
-test_that("rate.esp leaves the equilibrium where it was", {
+test_that("rate.esp leaves the equilibrium where it was, capped or not", {
   #The load-bearing test.  Same model, same coefficients, very different pacing:
   #the equilibrium distribution must be unchanged, because the modulation is
-  #symmetric in the two states each toggle connects.
+  #symmetric in the two states each toggle connects.  Capping does not disturb
+  #that -- min(ESP,cap) is still a function of the dyad's neighbourhood alone --
+  #so the capped arm makes the same claim and is tested to the same standard.
+  #
+  #Both modulated arms are compared against one unmodulated arm rather than
+  #against one each: the null arm is identical between them, and computing it
+  #twice was a quarter of this file's runtime for no additional evidence.
   #
   #Keep this cheap.  rate.esp rescales the clock -- the total event rate rises
   #by roughly exp(lambda * mean ESP) -- so running both arms to the same `time`
@@ -100,19 +106,24 @@ test_that("rate.esp leaves the equilibrium where it was", {
   co <- c(-2.2, 0.8, 0.6)
   mono <- function(x) summary(x ~ edges + nodematch("sex") + gwesp(0.3, fixed = TRUE))
   reps <- 150
-  run <- function(lam){
+  run <- function(lam, cap){
     set.seed(99)
     t(vapply(seq_len(reps), function(i){
       nw <- esp_net(seed = i)
       mono(simEGP(nw ~ edges + nodematch("sex") + gwesp(0.3, fixed = TRUE),
                   coef = co, time = 25, process = "LERGM",
-                  rate.esp = lam, rate.esp.cap = Inf, verbose = FALSE))
+                  rate.esp = lam, rate.esp.cap = cap, verbose = FALSE))
     }, numeric(3)))
   }
-  A <- run(0); B <- run(0.5)
-  se <- sqrt(apply(A, 2, var)/reps + apply(B, 2, var)/reps)
-  z  <- (colMeans(A) - colMeans(B)) / se
-  expect_lt(max(abs(z)), 4)
+  z <- function(A, B){
+    se <- sqrt(apply(A, 2, var)/reps + apply(B, 2, var)/reps)
+    max(abs((colMeans(A) - colMeans(B)) / se))
+  }
+  A <- run(0, Inf)               #Unmodulated: the reference for both arms
+  #cap = 2 has to bind for the capped arm to be a test of anything: esp_net()
+  #has density 60/276, so a typical dyad's ESP is about 1, with a tail to 5-6.
+  expect_lt(z(A, run(0.5, Inf)), 4)
+  expect_lt(z(A, run(0.5, 2)),   4)
 })
 
 
@@ -236,32 +247,4 @@ test_that("a finite cap makes the thinning engine viable", {
   a_cap <- acc(3); a_unc <- acc(Inf)
   expect_gt(a_cap, 0.01)
   expect_gt(a_cap, 20 * a_unc)
-})
-
-
-test_that("a capped rate.esp leaves the equilibrium where it was", {
-  #Capping keeps min(ESP,cap) a function of the dyad's neighbourhood alone, so
-  #it is still unchanged by toggling the dyad and the detailed-balance argument
-  #is untouched.  This is the same test as the uncapped one above, and it is
-  #load-bearing for the same reason: if it fails, a capped run is silently
-  #simulating a different ERGM than the one requested.
-  #
-  #cap = 2 has to bind for this to be a test of anything: esp_net() has density
-  #60/276, so a typical dyad's ESP is about 1 with a tail to 5 or 6.
-  skip_on_cran()
-  co <- c(-2.2, 0.8, 0.6)
-  mono <- function(x) summary(x ~ edges + nodematch("sex") + gwesp(0.3, fixed = TRUE))
-  reps <- 150
-  run <- function(lam, cap){
-    set.seed(99)
-    t(vapply(seq_len(reps), function(i){
-      nw <- esp_net(seed = i)
-      mono(simEGP(nw ~ edges + nodematch("sex") + gwesp(0.3, fixed = TRUE),
-                  coef = co, time = 25, process = "LERGM", rate.esp = lam,
-                  rate.esp.cap = cap, verbose = FALSE))
-    }, numeric(3)))
-  }
-  A <- run(0, Inf); B <- run(0.5, 2)
-  se <- sqrt(apply(A, 2, var)/reps + apply(B, 2, var)/reps)
-  expect_lt(max(abs((colMeans(A) - colMeans(B)) / se)), 4)
 })
