@@ -36,6 +36,8 @@ Now, consider a continuous time process whose state space is \eqn{\mathcal{G}}{S
 
 The \code{ergmgp} package supports a number of different EGPs, all of which are currently Markovian with support on graphs or digraphs of fixed order.  The following EGPs are currently supported; all definitions and notation follow Butts (2023).  Define  \eqn{q(g) = \theta^T w(g,X) + \ln h(g)}{q(g) = \theta^T w(g,X) + ln h(g)} to be the \emph{graph potential}; in some cases, separate potentials (\eqn{q_f} and \eqn{q_d}) may be employed for the formation and dissolution of edges.  For brevity, we define the normalizing factor of the equilibrium ERGM distribution by \eqn{Z = \sum_{g' \in \mathcal{G}} q(g')}{Z = sum_{g' in Supp(G)} q(g')}, let \eqn{w_e} be the edge count statistic, and let \eqn{\mathcal{H}(g)}{H(g)} be the Hamming neighborhood of \eqn{g} (i.e., the set of graphs reachable by single edge changes, or \dQuote{toggles}).  All transition rates from graph \eqn{a} to \eqn{b} (denoted \eqn{a \to b}{a -> b}) zero for \eqn{b \not\in \mathcal{H}(a)}{b not in H(a)}.  Processes not otherwise noted were introduced in Butts (2023).
 
+The rates and equilibria below are stated for the unconstrained support.  When a sample-space constraint is in force (see \code{\link{simEGP}}), \eqn{\mathcal{H}(a)}{H(a)} is instead the set of graphs reachable by one \emph{legal} move -- which under a count-preserving constraint toggles two or four edge variables at once -- and each rate is applied to the potential difference of the whole move.  The equilibria continue to hold, now over the constrained support, with one exception: \code{DS}, whose rate involves \eqn{|\mathcal{H}|}{|H|} itself and which therefore requires that count to be the same in every reachable state.  See \code{\link{simEGP}} and \code{\link{EGPConstraintSupport}}.
+
 \describe{
   \item{Longitudinal ERGM (\code{LERGM})}{
     \describe{
@@ -76,12 +78,16 @@ The \code{ergmgp} package supports a number of different EGPs, all of which are 
   \item{Differential Statibility (\code{DS})}{
     \describe{
       \item{Description:}{ Analogous to a \dQuote{win-stay, lose-shift} process, transition targets in this EGP are chosen uniformly at random, with structure arising entirely from transition \emph{times}.  The time to exit a state \eqn{g} is proportional to \eqn{\exp[q(g)]}{exp[q(g)]}, making high-potential states exponentially more persistent than low-potential states.  Note that this process is in a sense the inverse of the \code{CRSAOM}, being dependent only on the potential of the source state (while the \code{CRSAOM} depends only on the potential of the target state).  Since the transitions themselves from a random walk, it should be noted that this process can generate very large numbers of transition events involving low-potential states that, while taking little phenomenological time, nevertheless are expensive to compute.
+
+      Because the rate carries \eqn{|\mathcal{H}(a)|^{-1}}{1/|H(a)|}, the equilibrium below holds only where \eqn{|\mathcal{H}|}{|H|} takes the same value in every reachable state.  That is automatic on the unconstrained support, where it is the dyad count, and under every constraint whose move count is pinned by the constraint itself; it fails under \code{~degrees}, where a tetrad is legal only if the two dyads it would form are absent, so that the equilibrium becomes \eqn{|\mathcal{H}(a)|\exp[q(a)]/Z'}{|H(a)| exp[q(a)]/Z'} instead.  \code{\link{simEGP}} refuses that combination rather than simulating it.
+
+      This is also the one process for which stopping on a fixed event count is not merely biased but uninformative: the rate does not depend on which move is taken, so the embedded jump chain is uniform over the legal moves and carries no information about \eqn{q} at all.  Terminate on \code{time}.
       }
       \item{Event Rate (\eqn{a \to b}{a -> b}):}{
         \eqn{|\mathcal{H}(a)|^{-1} \exp[-q(a)]}{exp[-q(a)]/|H(a)|}
       }
       \item{Equilibrium:}{
-        \eqn{\exp[q(a)]/Z}{exp[q(a)]/Z}
+        \eqn{\exp[q(a)]/Z}{exp[q(a)]/Z}, for constant \eqn{|\mathcal{H}|}{|H|} (see Description)
       }
     }
   }
