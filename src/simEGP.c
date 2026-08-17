@@ -71,10 +71,32 @@ static double esp_count(Vertex t, Vertex h, Network *nwp){
   Restricted to single-toggle moves: for a multi-dyad move the reverse move
   changes the neighbourhoods of the dyads involved, so ESP is no longer
   invariant and symmetry -- hence the equilibrium -- would be lost.
+
+  The modulation is capped at espcap:
+
+      A_th = A * exp(lambda * min(ESP_th, espcap)),
+
+  which is what makes exact thinning affordable.  Uniformization needs an upper
+  bound on the rate; without a cap the only bound available for ESP is the
+  maximum degree, giving an acceptance probability of exp(-lambda * max deg) --
+  about e^-100 on a real network, i.e. zero.  With a cap the bound is exactly
+  A*exp(lambda*espcap).  See rate_bound().
+
+  min(ESP,espcap) is still a function of the dyad's neighbourhood *excluding the
+  dyad itself*, so it is still unchanged by toggling (t,h) and the symmetry
+  argument above goes through verbatim: capping does not move the equilibrium.
+
+  That is also the constraint on any future refinement here.  It is tempting to
+  use min(ESP, min(espcap, max degree)) so that an over-large cap is harmless,
+  but max degree changes when (t,h) is toggled, so s would stop being symmetric
+  and the equilibrium guarantee would be destroyed -- silently, since the
+  simulation would still run and still produce plausible networks.  The *bound*
+  may depend on the current state; the *modulation* may not.
 */
-static double rate_esp_mod(double resp, const Move *mv, Network *nwp){
-  if(resp == 0.0 || mv->ntoggles != 1) return 0.0;
-  return resp * esp_count(mv->tails[0], mv->heads[0], nwp);
+static double rate_esp_mod(double resp, double espcap, const Move *mv, Network *nwp){
+  if(resp == 0.0 || espcap <= 0.0 || mv->ntoggles != 1) return 0.0;
+  /*fmin(x, R_PosInf) == x, so an infinite cap is the uncapped process*/
+  return resp * fmin(esp_count(mv->tails[0], mv->heads[0], nwp), espcap);
 }
 
 /*
@@ -95,11 +117,11 @@ static double rate_esp_mod(double resp, const Move *mv, Network *nwp){
 static double score_move(const Move *mv, int egp, Model *m, Network *nwp,
                          double *coef, int cooffset, double lcrate,
                          double lHneigh, const double *pot, double *relpot,
-                         double *newRow, double resp){
+                         double *newRow, double resp, double espcap){
   int j;
   /*Dyad-varying pacing: shifts every rate for this move by the same amount,
     symmetrically in the two states, so the equilibrium is unaffected.*/
-  lcrate += rate_esp_mod(resp, mv, nwp);
+  lcrate += rate_esp_mod(resp, espcap, mv, nwp);
   relpot[0] = relpot[1] = 0.0;
   memset(newRow, 0.0, m->n_stats*sizeof(double));
   if(mv->ntoggles == 1){
@@ -166,13 +188,28 @@ static double score_move(const Move *mv, int egp, Model *m, Network *nwp,
   exists, in which case the caller must enumerate instead.
 */
 static double rate_bound(int egp, double lcrate, double lHneigh, const double *pot,
-                         double resp, Network *nwp){
-  if(resp != 0.0){
-    /*ESP_th <= min(deg t, deg h) <= max degree, so this bounds the modulation.
-      It is valid but loose, which is why "auto" prefers enumeration here.*/
-    double mx = 0.0;
-    for(Vertex v = 1; v <= N_NODES; v++) if(DEG(v) > mx) mx = DEG(v);
-    lcrate += (resp > 0.0) ? resp * mx : 0.0;
+                         double resp, double espcap, Network *nwp){
+  if(resp > 0.0){
+    /*The modulation is exp(resp*min(ESP,espcap)), and min(ESP,espcap) lies in
+      [0,espcap] -- which requires espcap >= 0, enforced in R.  So resp*espcap
+      bounds it, and does so *exactly* once any dyad reaches the cap.  Only an
+      infinite cap needs the fallback ESP <= min(deg t, deg h) <= max degree,
+      which costs an O(n) scan per proposal and is what made the uncapped
+      feature unusable above a few hundred nodes.
+
+      Unlike the modulation itself, a bound is allowed to depend on the current
+      state: Lambda is recomputed from the state at each proposal and is
+      constant throughout a sojourn, which is all uniformization requires.  See
+      rate_esp_mod() for why the modulation may not.
+
+      resp < 0 needs no term at all: max over m in [0,espcap] of resp*m is 0,
+      attained at m = 0.*/
+    double mx = espcap;
+    if(!R_FINITE(mx)){
+      mx = 0.0;
+      for(Vertex v = 1; v <= N_NODES; v++) if(DEG(v) > mx) mx = DEG(v);
+    }
+    lcrate += resp * mx;
   }
   switch(egp){
     case EGP_LERGM: return lcrate;                       /*A/(1+exp(-d)) <= A*/
@@ -232,6 +269,9 @@ static double rate_bound(int egp, double lcrate, double lHneigh, const double *p
                 NULL if there is no dyad-level restriction
     sthin - logical; use the thinning (uniformization) engine rather than enumerating
             the move set?  Only valid for processes with a bounded rate
+    sresp - dyad-varying pacing coefficient (lambda); 0 disables the modulation
+    sespcap - largest shared-partner count the pacing factor responds to; R_PosInf
+              for the uncapped process.  Must be non-negative (see rate_bound)
 
   Return value:
     A named list with elements
@@ -246,9 +286,9 @@ static double rate_bound(int egp, double lcrate, double lHneigh, const double *p
                sender, receiver, time, and formation indicator (1=onset, 0=terminus)
       proposals: number of candidate moves drawn (thinning engine only)
 */
-SEXP simEGP_R(SEXP segp, SEXP mstate, SEXP scoef, SEXP scooffset, SEXP stmax, SEXP sevmax, SEXP slcrate, SEXP spot, SEXP slogtime, SEXP slasttog, SEXP slttoff, SEXP skeephist, SEXP sverbose, SEXP sfamily, SEXP srledyads, SEXP sthin, SEXP sresp){
+SEXP simEGP_R(SEXP segp, SEXP mstate, SEXP scoef, SEXP scooffset, SEXP stmax, SEXP sevmax, SEXP slcrate, SEXP spot, SEXP slogtime, SEXP slasttog, SEXP slttoff, SEXP skeephist, SEXP sverbose, SEXP sfamily, SEXP srledyads, SEXP sthin, SEXP sresp, SEXP sespcap){
   int pc=0,verbose,i,j,egp,cooffset,logtime,lasttog,keephist,family,thin;
-  double *coef,tmax,evmax,lcrate,ecount,simtime,pot[2],lHneigh,*ltt,*dp,*rledyads,resp;
+  double *coef,tmax,evmax,lcrate,ecount,simtime,pot[2],lHneigh,*ltt,*dp,*rledyads,resp,espcap;
   double tm,relpot[2],ltotrat=R_NegInf,selpot[2];
   double ncand=0.0,propcount=0.0;
   double *pehist,*pdp;
@@ -305,6 +345,13 @@ SEXP simEGP_R(SEXP segp, SEXP mstate, SEXP scoef, SEXP scooffset, SEXP stmax, SE
   PROTECT(sresp=coerceVector(sresp,REALSXP));        /*Dyad-varying pacing (ESP)*/
   resp=REAL(sresp)[0];
   UNPROTECT(1);
+  PROTECT(sespcap=coerceVector(sespcap,REALSXP));    /*...and the cap on it*/
+  espcap=REAL(sespcap)[0];
+  UNPROTECT(1);
+  /*R validates this; the fallback keeps the C entry point sound if it is called
+    directly, since a negative cap would put the rate above its own bound and
+    break the exactness of thinning.  See rate_bound().*/
+  if(ISNAN(espcap)||espcap<0.0) espcap=R_PosInf;
   if(srledyads==R_NilValue){
     rledyads=NULL;
   }else{
@@ -404,7 +451,7 @@ SEXP simEGP_R(SEXP segp, SEXP mstate, SEXP scoef, SEXP scooffset, SEXP stmax, SE
         and costs one change-statistic evaluation per candidate rather
         than one per member of the move set.
         ----------------------------------------------------------------*/
-      double lLambda=rate_bound(egp, lcrate, lHneigh, pot, resp, nwp);
+      double lLambda=rate_bound(egp, lcrate, lHneigh, pot, resp, espcap, nwp);
       ncand=MoveSetSupersetSize(ms, nwp);
       if(!R_FINITE(lLambda)||ncand<=0.0){
         error("Internal error: the thinning engine was invoked for a process with no rate bound, or an empty move set.  Please report this.\n");
@@ -418,7 +465,7 @@ SEXP simEGP_R(SEXP segp, SEXP mstate, SEXP scoef, SEXP scooffset, SEXP stmax, SE
       if(tm>=tmax) break;
       propcount++;
       if(MoveSetSample(ms, nwp, &mv)){
-        double lrate=score_move(&mv, egp, m, nwp, coef, cooffset, lcrate, lHneigh, pot, relpot, newRow, resp);
+        double lrate=score_move(&mv, egp, m, nwp, coef, cooffset, lcrate, lHneigh, pot, relpot, newRow, resp, espcap);
         /*Accept with probability rate/Lambda*/
         if(log(unif_rand())<lrate-lLambda){
           selmv=mv;
@@ -454,7 +501,7 @@ SEXP simEGP_R(SEXP segp, SEXP mstate, SEXP scoef, SEXP scooffset, SEXP stmax, SE
         lHneigh=log(nmoves);
         ltotrat=lcrate-pot[0];   /*= nmoves * A/(|H| exp(pot)) with |H|=nmoves*/
         if(havemove)
-          score_move(&selmv, egp, m, nwp, coef, cooffset, lcrate, lHneigh, pot, selpot, newRow, resp);
+          score_move(&selmv, egp, m, nwp, coef, cooffset, lcrate, lHneigh, pot, selpot, newRow, resp, espcap);
       }else{
         double selmax=R_NegInf,lmax=R_NegInf;
         double nmoves=0.0;
@@ -463,7 +510,7 @@ SEXP simEGP_R(SEXP segp, SEXP mstate, SEXP scoef, SEXP scooffset, SEXP stmax, SE
             walking a cumulative sum, rather than paying two logarithms per
             move for a Gumbel draw.*/
           while(MoveIterNext(&it, &mv)){
-            double lrate=score_move(&mv, egp, m, nwp, coef, cooffset, lcrate, lHneigh, pot, relpot, newRow, resp);
+            double lrate=score_move(&mv, egp, m, nwp, coef, cooffset, lcrate, lHneigh, pot, relpot, newRow, resp, espcap);
             lrates[mv.tails[0]-1+(mv.heads[0]-1)*n_nodes]=lrate;
             if(lrate>lmax) lmax=lrate;
             nmoves++;
@@ -484,13 +531,13 @@ SEXP simEGP_R(SEXP segp, SEXP mstate, SEXP scoef, SEXP scooffset, SEXP stmax, SE
           }
           if(!havemove){ selmv=mv; havemove=1; }  /*Rounding guard*/
           /*Recover the winner's potential difference (one extra evaluation)*/
-          score_move(&selmv, egp, m, nwp, coef, cooffset, lcrate, lHneigh, pot, selpot, newRow, resp);
+          score_move(&selmv, egp, m, nwp, coef, cooffset, lcrate, lHneigh, pot, selpot, newRow, resp, espcap);
         }else{
           /*Large move set: select by the Gumbel-max trick, which needs no
             storage.  We draw a Gumbel(0) deviate for each move and take the
             arg max of log(rate) + G, which can be done as we go.*/
           while(MoveIterNext(&it, &mv)){
-            double lrate=score_move(&mv, egp, m, nwp, coef, cooffset, lcrate, lHneigh, pot, relpot, newRow, resp);
+            double lrate=score_move(&mv, egp, m, nwp, coef, cooffset, lcrate, lHneigh, pot, relpot, newRow, resp, espcap);
             ltotrat=logspace_add(ltotrat,lrate);
             double selval=lrate-log(-log(runif(0.0,1.0)));
             if(selval>selmax){

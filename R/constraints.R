@@ -192,10 +192,29 @@ EGP_check_dots<-function(...){
 #
 #The symmetry argument is what constrains where this can be used, so the
 #restrictions below are correctness requirements, not conveniences.
-EGP_check_rate_esp<-function(rate.esp, con, nw){
+#
+#rate.esp.cap caps the modulation at exp(rate.esp * min(ESP, cap)).  min(ESP,cap)
+#is still a function of the dyad's neighbourhood alone, so the symmetry argument
+#is untouched and the equilibrium is still exactly the specified ERGM.  What the
+#cap buys is a tight thinning bound; see EGP_engine() and src/simEGP.c.
+EGP_check_rate_esp<-function(rate.esp, rate.esp.cap=5, con, nw){
   if(is.null(rate.esp)||length(rate.esp)!=1L||!is.finite(rate.esp))
     stop("`rate.esp` must be a single finite number (0 disables it).")
-  if(rate.esp==0) return(invisible(NULL))
+  #Checked before the rate.esp==0 exit, so that a bad cap is never silently
+  #accepted just because the modulation happens to be switched off.  Inf is
+  #legal and means "no cap"; a *negative* cap is not merely odd but unsound,
+  #since min(ESP,cap) would then be constant and negative, putting the true rate
+  #above the bound the thinning engine assumes.
+  if(is.null(rate.esp.cap)||length(rate.esp.cap)!=1L||!is.numeric(rate.esp.cap)||
+     is.na(rate.esp.cap)||rate.esp.cap<0)
+    stop("`rate.esp.cap` must be a single non-negative number, or Inf for no cap.\n",
+         "  It is the largest shared-partner count the pacing factor responds to, so a\n",
+         "  negative value has no meaning; it would also invalidate the rate bound the\n",
+         "  thinning engine relies on, which assumes the modulation exponent lies in\n",
+         "  [0, rate.esp.cap].")
+  #A zero cap makes the modulation identically 1, so there is nothing left for
+  #the restrictions below to protect.
+  if(rate.esp==0||rate.esp.cap==0) return(invisible(NULL))
   if(is.directed(nw))
     stop("`rate.esp` is defined for undirected networks only.\n",
          "  Shared-partner counts have several inequivalent directed analogues (OTP, ITP,\n",
@@ -356,10 +375,14 @@ EGP_constraints<-function(constraints, nw, proc){
 #  con     - the object returned by EGP_constraints()
 #  proc    - process name
 #  engine  - user request: "auto", "thinning", or "enumeration"
+#  rate.esp, rate.esp.cap - the dyad-varying pacing factor, which bears on the
+#            choice: the thinning bound has to dominate the modulation, and how
+#            tightly it can do so depends on whether the cap is finite
 #  verbose - logical; report the choice?
 #
 #Return value: 0L for enumeration, 1L for thinning.
-EGP_engine<-function(con, proc, engine=c("auto","thinning","enumeration"), verbose=FALSE){
+EGP_engine<-function(con, proc, engine=c("auto","thinning","enumeration"),
+                     rate.esp=0, rate.esp.cap=5, verbose=FALSE){
   engine<-match.arg(engine)
   cap<-EGP_process_caps[[proc]]
   if(engine=="thinning" && !cap$thin)
@@ -388,14 +411,46 @@ EGP_engine<-function(con, proc, engine=c("auto","thinning","enumeration"), verbo
   #one to two orders of magnitude faster.  For the constrained families there
   #is no prior behaviour to preserve, and enumeration is prohibitively slow, so
   #thinning is the default wherever the process admits a rate bound.
+  #
+  #A dyad-varying pacing factor changes that calculus, because the thinning
+  #bound has to dominate the modulation over every dyad.  With a finite cap the
+  #bound is exactly A*exp(rate.esp*rate.esp.cap): tight, state-independent, and
+  #free of the per-proposal max-degree scan, so thinning is right even for the
+  #unconstrained family (rate.esp is new, so there is no prior behaviour to
+  #preserve there).  With no cap the bound must assume the most-connected dyad,
+  #giving an acceptance probability of about exp(-rate.esp * max degree) --
+  #unusable above a few hundred nodes -- so "auto" enumerates instead.
+  esp.on<-rate.esp!=0 && rate.esp.cap>0
   use.thin<-switch(engine,
-                   auto=cap$thin && con$family!=EGP_MS_FREE,
+                   auto=if(esp.on) cap$thin && is.finite(rate.esp.cap)
+                        else cap$thin && con$family!=EGP_MS_FREE,
                    thinning=TRUE,
                    enumeration=FALSE)
+  if(use.thin && esp.on && !is.finite(rate.esp.cap))
+    warning("engine=\"thinning\" with rate.esp=",rate.esp," and no cap: the rate bound has\n",
+            "  to assume the most-connected dyad, so the acceptance probability is about\n",
+            "  exp(-rate.esp * max degree).  This is still exact, but on any sizeable\n",
+            "  network it may not finish.  Set `rate.esp.cap` (the default is 5).",
+            call.=FALSE)
+  if(use.thin && esp.on && rate.esp*rate.esp.cap>15)
+    warning("rate.esp * rate.esp.cap = ",format(rate.esp*rate.esp.cap),
+            " puts the thinning acceptance\n  probability below exp(-15), so the run may not",
+            " finish; beyond about 700 the\n  inter-event time underflows to zero and the",
+            " clock stops advancing altogether\n  (use.logtime=TRUE avoids that part).",
+            "  Reduce `rate.esp.cap`.",call.=FALSE)
   if(verbose){
     message("EGP: process ",proc,", constraint ",con$label,", ",
             con$ntoggles," toggle(s) per event, engine ",
             if(use.thin) "thinning (exact uniformization)" else "enumeration",".")
+    #The cap is a *model* parameter and its default is finite, so a run should
+    #never be quietly capped: say what is in force and how to turn it off.
+    if(esp.on)
+      message("EGP: dyad-varying pacing, rate.esp=",rate.esp,
+              if(is.finite(rate.esp.cap))
+                paste0(", modulated by min(ESP, ",format(rate.esp.cap),
+                       ").  The cap leaves the equilibrium unchanged but does change the ",
+                       "dynamics; pass rate.esp.cap=Inf for the uncapped process.")
+              else ", uncapped.")
     if(!use.thin && con$ntoggles>1L)
       message("EGP: note - enumerating a ",con$ntoggles,
               "-toggle move set is expensive; consider a process that supports thinning ",

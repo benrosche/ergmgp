@@ -42,8 +42,54 @@
   exist, so ergmgp does not choose one for you. A design wanting both a fixed
   edge count and an opportunity effect has to specify that choice itself.
 
-* Because a non-zero `rate.esp` makes the thinning bound loose, `engine="auto"`
-  selects enumeration when it is in use.
+* **New `rate.esp.cap`, defaulting to 5, caps the modulation** at
+  `exp(rate.esp * min(ESP, cap))`. Without it the feature does not scale, and
+  not in the ordinary sense: exact simulation by thinning needs an upper bound
+  on the rate, the only general bound on ESP is the maximum degree, and on a
+  real network with `rate.esp = 0.5` that puts the acceptance probability
+  around `e^-100`. Not slow — zero. So an uncapped run has to enumerate, and
+  enumeration does not scale either; the feature was unusable much above
+  n = 200.
+
+  With a finite cap the bound is exactly `A*exp(rate.esp*cap)` — tight,
+  state-independent, and free of the per-proposal max-degree scan — so
+  `engine="auto"` now selects thinning when the cap is finite and enumeration
+  when it is not. Acceptance scales roughly as `exp(-rate.esp*cap)`; ergmgp
+  warns when that product exceeds 15, and when thinning is requested with no
+  cap at all.
+
+  **The invariance result is untouched.** `min(ESP, cap)` is still a function of
+  the dyad's neighbourhood excluding the dyad itself, so it is still unchanged
+  by toggling that dyad, the modulation is still symmetric, and the equilibrium
+  is still exactly the ERGM implied by `coef`. (The tempting refinement
+  `min(ESP, min(cap, max degree))` is *not* safe, and the code says so: maximum
+  degree changes when the dyad is toggled, so that version would break symmetry
+  silently, while still producing plausible-looking networks.)
+
+* **The cap's default is finite, so it changes results** for an existing
+  `rate.esp` call. The equilibrium is invariant either way, but the transient is
+  not — and the transient is the entire content of an opportunity effect. It is
+  therefore announced rather than assumed: a run reports the cap in force under
+  `verbose`, and every modulated network records `"RateESP"` and `"RateESPCap"`
+  so that a `verbose=FALSE` run still carries the model it was produced under.
+  `rate.esp.cap = Inf` restores the uncapped process exactly.
+
+  The cap is a model parameter, not a numerical tolerance. There is a
+  substantive case for it: a recommendation surface has finitely many slots, so
+  the boost from a sixth mutual friend is not the boost from a second, and
+  saturation is a more defensible functional form than an unbounded exponential.
+
+* Fixed: the `engine="auto"` fallback for a non-zero `rate.esp` tested
+  `identical(engine, c("auto","thinning","enumeration"))`, i.e. the *unevaluated
+  default*, so it never fired for an explicit `engine="auto"` nor for anything
+  arriving from `simEGPTraj()`. Under a dyad-level constraint, where `auto`
+  gives thinning, those paths silently used the loose bound. The rule now lives
+  in `EGP_engine()` and applies however `auto` is reached.
+
+* Fixed: `simEGPTraj()` did not validate `rate.esp` up front, so a misuse
+  surfaced from inside a worker — and on Unix `mclapply()` returns `try-error`
+  objects rather than stopping, so it could surface as a malformed return value
+  rather than as an error.
 
 ## Constrained sample spaces
 

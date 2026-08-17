@@ -132,7 +132,7 @@ EGP_init<-function(form, coef=NULL, process=c("LERGM", "CRSAOM", "CI", "DS", "CD
 #  "Potential" attribute.  If indicated, last change times are given in the 
 #  "LastChangeTime" attribute, and event histories in the "EventHistory" attribute.
 #
-simEGP<-function(form, coef, events=1, time=NULL, rate.factor=1, time.offset=0, event.offset=0, process=c("LERGM", "CRSAOM", "CI", "DS", "CDCSTERGM", "CFCSTERGM", "CSTERGM", "CTERGM"), constraints=NULL, engine=c("auto","thinning","enumeration"), rate.esp=0, use.logtime=FALSE, return.changetime=FALSE, changetime.offset=NULL, return.history=FALSE, return.networkDynamic=FALSE, verbose=TRUE, trace.interval=100, ...){
+simEGP<-function(form, coef, events=1, time=NULL, rate.factor=1, time.offset=0, event.offset=0, process=c("LERGM", "CRSAOM", "CI", "DS", "CDCSTERGM", "CFCSTERGM", "CSTERGM", "CTERGM"), constraints=NULL, engine=c("auto","thinning","enumeration"), rate.esp=0, rate.esp.cap=5, use.logtime=FALSE, return.changetime=FALSE, changetime.offset=NULL, return.history=FALSE, return.networkDynamic=FALSE, verbose=TRUE, trace.interval=100, ...){
   #Reject unknown arguments loudly.  Previously this function absorbed anything
   #into `...` and ignored it, so any misspelled or unsupported option was a
   #silent no-op -- the results looked plausible but answered a different
@@ -160,19 +160,23 @@ simEGP<-function(form, coef, events=1, time=NULL, rate.factor=1, time.offset=0, 
   }
   lratefact<-log(rate.factor)
   #Work out the move set and the engine, erroring on any unsupported combination
+  engine<-match.arg(engine)
   con<-EGP_constraints(constraints, nw, proc)
-  EGP_check_rate_esp(rate.esp, con, nw)
-  #A dyad-varying pacing factor makes the thinning bound loose (it has to assume
-  #the most-connected dyad), so prefer enumeration unless thinning was asked for.
-  if(rate.esp!=0 && identical(engine,c("auto","thinning","enumeration"))) engine<-"enumeration"
-  thin<-EGP_engine(con, proc, engine, verbose=!identical(verbose,FALSE))
+  EGP_check_rate_esp(rate.esp, rate.esp.cap, con, nw)
+  #A zero cap makes the modulation identically exp(0)=1, so normalise it away:
+  #the run is then bit-identical to rate.esp=0, engine choice included.
+  if(rate.esp.cap==0) rate.esp<-0
+  #How the pacing factor bears on the engine choice lives in EGP_engine(), so
+  #that simEGP() and simEGPTraj() cannot drift apart.
+  thin<-EGP_engine(con, proc, engine, rate.esp=rate.esp, rate.esp.cap=rate.esp.cap,
+                   verbose=!identical(verbose,FALSE))
   #If returning as a networkDynamic object, activate history tracking
   if(return.networkDynamic)
     return.history<-TRUE
   #Run the simulation, using the specified ERGM generating process
   if(verbose)
     verbose<-max(1,trace.interval)
-  z<-.Call("simEGP_R", procnum, state, coef, cooffset, tmax, evmax, lratefact, pot, as.integer(use.logtime), return.changetime, changetime.offset, return.history, as.integer(verbose), con$family, con$rlebdm, thin, as.double(rate.esp), PACKAGE="ergmgp")
+  z<-.Call("simEGP_R", procnum, state, coef, cooffset, tmax, evmax, lratefact, pot, as.integer(use.logtime), return.changetime, changetime.offset, return.history, as.integer(verbose), con$family, con$rlebdm, thin, as.double(rate.esp), as.double(rate.esp.cap), PACKAGE="ergmgp")
   #Construct the response
   if(return.networkDynamic){  #Fold the event history into a networkDynamic object
     #Create a base object (ignore warnings about not having data - we add it later)
@@ -219,7 +223,13 @@ simEGP<-function(form, coef, events=1, time=NULL, rate.factor=1, time.offset=0, 
   #A low acceptance rate means most candidates were rejected, which is the one
   #way the thinning engine can be slow; it does not affect correctness.
   nw%n%"Constraint"<-con$label
-  if(rate.esp!=0) nw%n%"RateESP"<-rate.esp
+  #The cap is recorded whenever the pacing is on, default or not, so that a run
+  #made with verbose=FALSE still carries the model it was actually simulated
+  #under rather than leaving the default implicit.
+  if(rate.esp!=0){
+    nw%n%"RateESP"<-rate.esp
+    nw%n%"RateESPCap"<-rate.esp.cap
+  }
   nw%n%"Engine"<-if(thin) "thinning" else "enumeration"
   if(thin&&(z$proposals>0))
     nw%n%"Acceptance"<-z$evcount/z$proposals
@@ -267,14 +277,18 @@ simEGP<-function(form, coef, events=1, time=NULL, rate.factor=1, time.offset=0, 
 #  attribute.  If only one trajectory is computed, a single matrix or network.list
 #  is returned (instead of a list thereof).
 # 
-simEGPTraj<-function(form, coef, events=1, time=NULL, checkpoints=1, rate.factor=1, trajectories=1, mc.cores=1, log.sampling=FALSE, process=c("LERGM", "CRSAOM", "CI", "DS", "CDCSTERGM", "CFCSTERGM", "CSTERGM", "CTERGM"), constraints=NULL, engine=c("auto","thinning","enumeration"), rate.esp=0, use.logtime=FALSE, return.changetime=FALSE, return.history=FALSE, verbose=TRUE, trace.interval=100, statsonly=FALSE, monitor=NULL){
+simEGPTraj<-function(form, coef, events=1, time=NULL, checkpoints=1, rate.factor=1, trajectories=1, mc.cores=1, log.sampling=FALSE, process=c("LERGM", "CRSAOM", "CI", "DS", "CDCSTERGM", "CFCSTERGM", "CSTERGM", "CTERGM"), constraints=NULL, engine=c("auto","thinning","enumeration"), rate.esp=0, rate.esp.cap=5, use.logtime=FALSE, return.changetime=FALSE, return.history=FALSE, verbose=TRUE, trace.interval=100, statsonly=FALSE, monitor=NULL){
   #Set things up
   ini<-EGP_init(form=form, coef=coef, process=process) #Pass to EGP_init for setup
-  #Validate the constraint up front, so that an unsupported combination fails
-  #here rather than inside every worker process.
+  #Validate the constraint and the pacing up front, so that an unsupported
+  #combination fails here rather than inside every worker process -- on Unix
+  #mclapply() returns try-error objects rather than stopping, so an error raised
+  #in a worker can surface as a malformed return value instead of an error.
   engine<-match.arg(engine)
-  invisible(EGP_engine(EGP_constraints(constraints, ini$nw, ini$proc), ini$proc, engine,
-                       verbose=!identical(verbose,FALSE)))
+  con<-EGP_constraints(constraints, ini$nw, ini$proc)
+  EGP_check_rate_esp(rate.esp, rate.esp.cap, con, ini$nw)
+  invisible(EGP_engine(con, ini$proc, engine, rate.esp=rate.esp,
+                       rate.esp.cap=rate.esp.cap, verbose=!identical(verbose,FALSE)))
   proc<-ini$proc
   bn<-ini$nw
   ipot<-ini$pot
@@ -331,7 +345,7 @@ simEGPTraj<-function(form, coef, events=1, time=NULL, checkpoints=1, rate.factor
         nform<-list(formation=as.formula(paste("net",f[1],sep="~")), dissolution=as.formula(paste("net",f[2],sep="~")))
       else
         nform<-as.formula(paste("net",f,sep="~"))
-      net<-simEGP(nform, coef=coef, events=evinc[i], time=timeinc[[i]], rate.factor=rate.factor, time.offset=net%n%"Time", event.offset=net%n%"Events", changetime.offset=net%n%"LastChangeTime", process=process, constraints=constraints, engine=engine, rate.esp=rate.esp, use.logtime=use.logtime, return.changetime=return.changetime, return.history=return.history, verbose=verbose, trace.interval=trace.interval)
+      net<-simEGP(nform, coef=coef, events=evinc[i], time=timeinc[[i]], rate.factor=rate.factor, time.offset=net%n%"Time", event.offset=net%n%"Events", changetime.offset=net%n%"LastChangeTime", process=process, constraints=constraints, engine=engine, rate.esp=rate.esp, rate.esp.cap=rate.esp.cap, use.logtime=use.logtime, return.changetime=return.changetime, return.history=return.history, verbose=verbose, trace.interval=trace.interval)
       #If desired, save the network
       if(!statsonly)
         sim[[i+1]]<-net

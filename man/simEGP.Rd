@@ -15,7 +15,7 @@ simEGP(form, coef, events = 1, time = NULL, rate.factor = 1,
     time.offset = 0, event.offset = 0, process = c("LERGM", "CRSAOM",
     "CI", "DS", "CDCSTERGM", "CFCSTERGM", "CSTERGM", "CTERGM"),
     constraints = NULL, engine = c("auto", "thinning", "enumeration"),
-    rate.esp = 0, use.logtime = FALSE, return.changetime = FALSE,
+    rate.esp = 0, rate.esp.cap = 5, use.logtime = FALSE, return.changetime = FALSE,
     changetime.offset = NULL, return.history = FALSE,
     return.networkDynamic = FALSE, verbose = TRUE,  trace.interval = 100,
     ...)
@@ -24,7 +24,8 @@ simEGPTraj(form, coef, events = 1, time = NULL, checkpoints = 1,
     rate.factor = 1, trajectories = 1, mc.cores = 1,
     log.sampling = FALSE, process = c("LERGM", "CRSAOM", "CI", "DS",
     "CDCSTERGM", "CFCSTERGM", "CSTERGM", "CTERGM"), constraints = NULL,
-    engine = c("auto", "thinning", "enumeration"), rate.esp = 0, use.logtime = FALSE,
+    engine = c("auto", "thinning", "enumeration"), rate.esp = 0,
+    rate.esp.cap = 5, use.logtime = FALSE,
     return.changetime = FALSE, return.history = FALSE, verbose = TRUE,
     trace.interval = 100, statsonly = FALSE, monitor = NULL)
 }
@@ -58,10 +59,13 @@ the ERGM generating process to use (described below).
 optionally, a one-sided formula restricting the sample space, using the same syntax as \code{\link[ergm]{ergm}}: any dyad-level constraint, or one of \code{~edges}, \code{~degrees}, \code{~odegrees}, \code{~idegrees}.  Not every combination of process and constraint is supported; see \sQuote{Constrained sample spaces} below, and \code{\link{EGPConstraintSupport}} for the full table.  Unsupported combinations raise an error rather than being silently ignored.
 }
   \item{engine}{
-how to simulate the constrained process: \code{"thinning"} (exact uniformization; one change-statistic evaluation per candidate move), \code{"enumeration"} (walk the whole move set at every event), or \code{"auto"} (the default: thinning wherever the process admits it).  Both are exact; they differ only in cost.  See \sQuote{Constrained sample spaces}.
+how to simulate the process: \code{"thinning"} (exact uniformization; one change-statistic evaluation per candidate move), \code{"enumeration"} (walk the whole move set at every event), or \code{"auto"} (the default).  Both are exact; they differ only in cost.  Under \code{"auto"} the constrained families are thinned wherever the process admits a rate bound, while the unconstrained process stays on enumeration so that results predating the thinning engine are reproduced; and when \code{rate.esp} is non-zero, thinning is selected if and only if \code{rate.esp.cap} is finite, since only then is the bound tight enough to be useful.  See \sQuote{Constrained sample spaces} and \sQuote{Opportunity versus preference}.
 }
   \item{rate.esp}{
-a dyad-varying pacing factor: each edge variable's transition rate is multiplied by \code{exp(rate.esp * ESP)}, where \code{ESP} is that dyad's number of shared partners.  Zero (the default) recovers the ordinary process.  Positive values make well-embedded dyads come up for reconsideration more often without changing how attractive they are, which leaves the equilibrium untouched; see \sQuote{Opportunity versus preference} below.  Undirected, single-dyad moves only.
+a dyad-varying pacing factor: each edge variable's transition rate is multiplied by \code{exp(rate.esp * min(ESP, rate.esp.cap))}, where \code{ESP} is that dyad's number of shared partners.  Zero (the default) recovers the ordinary process.  Positive values make well-embedded dyads come up for reconsideration more often without changing how attractive they are, which leaves the equilibrium untouched; see \sQuote{Opportunity versus preference} below.  Undirected, single-dyad moves only.
+}
+  \item{rate.esp.cap}{
+the largest shared-partner count the pacing factor responds to: dyads with more shared partners than this are paced as though they had exactly this many.  It leaves the equilibrium exactly where \code{rate.esp} alone leaves it, for the same reason, but it does change the dynamics, so it is a model parameter to be chosen and reported rather than a tuning constant to be adjusted until results settle.  It also makes exact simulation affordable: the transition rate is then bounded by \eqn{A e^{\lambda c}}, tightly, where an uncapped run has to assume the most-connected dyad and becomes unusable above a few hundred nodes.  Defaults to 5; pass \code{Inf} for the uncapped process.  Ignored when \code{rate.esp} is zero, though still validated.
 }
   \item{use.logtime}{
 logical; internally, use logarithmic timescale?  This can potentially protect against overflow or underflow when rates are extreme, but can reduce precision and adds some overhead.
@@ -151,7 +155,7 @@ That same dependence on the move count makes \code{DS} the one process for which
 
 The size of that tilt is computable rather than merely bounded, since \eqn{\pi_{DS}} is exactly \eqn{\pi} reweighted by \eqn{|H|}: the induced shift in a statistic \eqn{g} is \eqn{E[g|H|]/E[|H|] - E[g]} under the target.  It is small and falls quickly with size -- at fixed mean degree, roughly \eqn{n^{-1.1}} absolutely and \eqn{n^{-1.65}} relative to the statistic, about 0.09\% at \eqn{n = 14} and 0.001\% at \eqn{n = 200}, and smaller again at higher density.  The refusal is therefore not a claim that the error is large; it is that the process does not have the stated equilibrium, and that the discrepancy is worst in precisely the small, sparse regime where an equilibrium is most likely to be checked exactly.
 
-The realised constraint and engine are recorded on the returned network as the \code{"Constraint"} and \code{"Engine"} attributes; for the thinning engine, \code{"Acceptance"} gives the fraction of candidates accepted.  A low acceptance rate costs speed but never correctness.
+The realised constraint and engine are recorded on the returned network as the \code{"Constraint"} and \code{"Engine"} attributes; for the thinning engine, \code{"Acceptance"} gives the fraction of candidates accepted.  A low acceptance rate costs speed but never correctness.  A modulated run additionally records \code{"RateESP"} and \code{"RateESPCap"}, so that a network simulated with \code{verbose=FALSE} still carries the pacing model it was produced under rather than leaving a defaulted cap implicit.
 
 Use \code{EGPConstraintSupport} to print the full process-by-constraint table.  Any unsupported combination is an error: this function no longer accepts and ignores unrecognised arguments.
 }
@@ -176,9 +180,19 @@ Restrictions, both of which are correctness requirements rather than convenience
 
 Note that this rules out \code{rate.esp} in combination with \code{~edges} as well as with \code{~degrees}: the edge dissolved by an \code{~edges} swap may itself be part of the formed dyad's shared-partner count, so the modulation differs between the two states the move connects.  A symmetric generalisation does exist -- the modulation would have to be a function of the \emph{unordered} pair of toggled dyads and of the rest of the graph, for instance the mean shared-partner count of the dissolved and formed dyads computed with both deleted -- but there are several such functions and they are not equivalent, so ergmgp does not choose one on the user's behalf.  A study wanting both a fixed edge count and an opportunity effect must therefore either specify that choice itself or use a dyad-level constraint instead.
 
-Two practical points.  A non-zero \code{rate.esp} makes the thinning bound loose, since it must assume the most-connected dyad; \code{engine="auto"} therefore selects enumeration when \code{rate.esp} is non-zero.
+\subsection{The cap, and why it is not optional at scale}{
+Exact simulation by thinning needs an upper bound on the transition rate, and the modulation \eqn{\exp(\lambda\,\mathrm{ESP}_{th})} has no useful bound: all that can be said in general is \eqn{\mathrm{ESP}_{th} \le \max_v \deg(v)}.  On a real network that is fatal rather than merely loose -- with a maximum degree in the hundreds and \eqn{\lambda = 0.5} the acceptance probability is around \eqn{e^{-100}}, which is not slow but zero -- so an uncapped run must enumerate, and enumeration does not scale either.  Uncapped, the feature is unusable much above \eqn{n = 200}.
 
-More importantly, \code{rate.esp} rescales the clock.  Raising every embedded dyad's rate raises the total event rate by roughly \eqn{\exp(\lambda \bar{L})}, where \eqn{\bar{L}} is the mean shared-partner count, so a run to a given \code{time} draws proportionately more events and costs proportionately more.  Comparing a modulated run against an unmodulated one at equal \code{time} is statistically the right comparison -- both approach the same equilibrium, the modulated one faster -- but the modulated arm may do an order of magnitude more work.  Budget accordingly, or compare at equal \code{events} when only the embedded jump chain is of interest.
+\code{rate.esp.cap} caps the modulation at
+\deqn{A_{th} = A \exp(\lambda \min(\mathrm{ESP}_{th}, c)),}
+which bounds the rate by exactly \eqn{A e^{\lambda c}}.  That bound is tight, does not depend on the state, and costs nothing to evaluate, so thinning becomes exact \emph{and} affordable: \code{engine="auto"} selects thinning when the cap is finite and enumeration when it is not.  As a rule of thumb the acceptance probability scales like \eqn{e^{-\lambda c}}, so \eqn{\lambda c \lesssim 3} is comfortable, \eqn{\lambda c \approx 5}--\eqn{10} is expensive, and beyond \eqn{\lambda c \approx 15} a run may not finish; far beyond it the inter-event time underflows to zero and the clock stops advancing altogether, which \code{use.logtime=TRUE} avoids.  Both of the outer cases warn.
+
+Capping does not disturb any of the above.  \eqn{\min(\mathrm{ESP}_{th}, c)} is still a function of the dyad's neighbourhood excluding the dyad itself, so it is still unchanged by toggling \eqn{(t,h)}, the modulation is still symmetric, and the equilibrium is still exactly the ERGM implied by \code{coef}.  What the cap does change is the dynamics, which is why it is a \emph{model parameter and not a tuning constant}: it should be chosen and reported, not raised until results stop moving.  There is a substantive case for it as the better model, too -- a recommendation surface has finitely many slots, and the boost from a sixth mutual friend is not the boost from a second, so saturation is the more defensible functional form and the uncapped exponential was never especially plausible at high \eqn{\mathrm{ESP}}.
+
+The default is \code{rate.esp.cap = 5}.  Pass \code{Inf} for the uncapped process.
+}
+
+One further practical point: \code{rate.esp} rescales the clock.  Raising every embedded dyad's rate raises the total event rate by roughly \eqn{\exp(\lambda \bar{L})}, where \eqn{\bar{L}} is the mean shared-partner count, so a run to a given \code{time} draws proportionately more events and costs proportionately more.  The cap bounds that too, at \eqn{e^{\lambda c}}, which is the other reason a capped run is affordable at a horizon an uncapped one is not.  Comparing a modulated run against an unmodulated one at equal \code{time} is statistically the right comparison -- both approach the same equilibrium, the modulated one faster -- but the modulated arm may do an order of magnitude more work.  Budget accordingly, or compare at equal \code{events} when only the embedded jump chain is of interest.
 }
 
 \value{
