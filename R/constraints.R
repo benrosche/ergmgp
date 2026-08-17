@@ -27,18 +27,32 @@ EGP_MS_DYAD     <- 1L   #1 toggle, restricted dyad set (via RLE bit matrix)
 EGP_MS_ODEGREES <- 2L   #2 toggles sharing a tail (out-degree preserving)
 EGP_MS_IDEGREES <- 3L   #2 toggles sharing a head (in-degree preserving)
 EGP_MS_DEGREES  <- 4L   #4 toggles (tetrad; degree preserving, undirected)
+EGP_MS_EDGES    <- 5L   #2 toggles (one edge out, one non-edge in; edge count
+                        #preserving, degree distribution free)
+
+#Codes at or above this one are multi-toggle families, for which one event
+#changes more than one edge variable.  Must agree with MS_MULTITOG in
+#src/moveset.h.
+EGP_MS_MULTITOG <- EGP_MS_ODEGREES
 
 
 #Which constraints does ergmgp know how to turn into a move set?
 #
+#These are the count-preserving constraints: each fixes some function of the
+#graph that no single toggle can leave alone, so each dictates its own move
+#shape.  At most one of them can be in force at a time.
+#
+#`directed` says which networks the constraint applies to (NA = either).
+#
 #Dyad-level constraints are not listed here: they are detected
 #structurally (see EGP_constraints below), so any present or future ergm
 #constraint that exposes a free_dyads element works automatically.
-EGP_degree_constraints <- list(
+EGP_moveset_constraints <- list(
   odegrees   = list(family=EGP_MS_ODEGREES, directed=TRUE,  ntoggles=2L),
   idegrees   = list(family=EGP_MS_IDEGREES, directed=TRUE,  ntoggles=2L),
   degrees    = list(family=EGP_MS_DEGREES,  directed=FALSE, ntoggles=4L),
-  nodedegrees= list(family=EGP_MS_DEGREES,  directed=FALSE, ntoggles=4L)
+  nodedegrees= list(family=EGP_MS_DEGREES,  directed=FALSE, ntoggles=4L),
+  edges      = list(family=EGP_MS_EDGES,    directed=NA,    ntoggles=2L)
 )
 
 
@@ -67,20 +81,26 @@ EGP_process_caps <- list(
 #Report which constraints each EGP supports, and by which engine.  See
 #man/EGPConstraintSupport.Rd; this package does not use roxygen.
 EGPConstraintSupport<-function(process=NULL){
-  cons<-c("~. (unconstrained)","dyad-level","~odegrees","~idegrees","~degrees")
-  fams<-c(EGP_MS_FREE,EGP_MS_DYAD,EGP_MS_ODEGREES,EGP_MS_IDEGREES,EGP_MS_DEGREES)
+  cons<-c("~. (unconstrained)","dyad-level","~edges","~odegrees","~idegrees","~degrees")
+  fams<-c(EGP_MS_FREE,EGP_MS_DYAD,EGP_MS_EDGES,EGP_MS_ODEGREES,EGP_MS_IDEGREES,EGP_MS_DEGREES)
   procs<-if(is.null(process)) names(EGP_process_caps) else match.arg(process,names(EGP_process_caps))
   out<-do.call(rbind,lapply(procs,function(p){
     cap<-EGP_process_caps[[p]]
     do.call(rbind,lapply(seq_along(cons),function(i){
-      multi<-fams[i]>=EGP_MS_ODEGREES
+      multi<-fams[i]>=EGP_MS_MULTITOG
       supported<-(!multi)||cap$multitog
+      #DS is a special case: its rate involves the size of the move set, which
+      #for a multi-toggle family can only be had by enumerating it, so thinning
+      #is unavailable there however bounded the rate is.
+      thin<-cap$thin && !(p=="DS" && multi)
       data.frame(process=p, constraint=cons[i],
                  supported=supported,
-                 engine=if(!supported) "-" else if(cap$thin) "thinning (exact)" else "enumeration",
+                 engine=if(!supported) "-" else if(thin) "thinning (exact)" else "enumeration",
                  note=if(!supported) "multi-toggle moves break formation/dissolution separability"
-                      else if(!multi) "" else if(cap$thin) paste0("rate bound = ",cap$bound)
-                      else "no rate bound; enumerated (slow for ~degrees)",
+                      else if(!multi) ""
+                      else if(thin) paste0("rate bound = ",cap$bound)
+                      else if(p=="DS") "rate needs the move count, so it must be enumerated (cheaply)"
+                      else "no rate bound; enumerated (slow for multi-toggle moves)",
                  stringsAsFactors=FALSE)
     }))
   }))
@@ -88,7 +108,7 @@ EGPConstraintSupport<-function(process=NULL){
   print(out,right=FALSE)
   cat("\nDyad-level constraints are those exposing a free-dyad set, e.g. blocks,\n",
       "observed, fixedas, fixallbut, egocentric, and combinations thereof.\n",
-      "They compose with the degree constraints (intersection).\n",sep="")
+      "They compose with the count-preserving constraints (intersection).\n",sep="")
   invisible(out)
 }
 
@@ -153,43 +173,52 @@ EGP_constraints<-function(constraints, nw, proc){
   if(length(cnames)==0L)
     return(list(family=EGP_MS_FREE, rlebdm=NULL, ntoggles=1L, label="~. (unconstrained)"))
 
-  #Split into degree-preserving vs dyad-level.  Dyad-level constraints are
+  #Split into count-preserving vs dyad-level.  Dyad-level constraints are
   #detected structurally: they are exactly those carrying a free_dyads
   #element, which is how ergm itself distinguishes them.
-  degcon<-intersect(cnames,names(EGP_degree_constraints))
-  othercon<-setdiff(cnames,degcon)
+  #
+  #Note that ergm has already resolved implication among the count-preserving
+  #constraints for us: ~degrees implies ~edges, so ergm_conlist(~edges+degrees)
+  #returns only `degrees` and we never see the redundant pair.
+  cntcon<-intersect(cnames,names(EGP_moveset_constraints))
+  othercon<-setdiff(cnames,cntcon)
   isdyadlevel<-vapply(othercon,function(k) !is.null(conlist[[k]]$free_dyads), logical(1))
   unsupported<-othercon[!isdyadlevel]
   if(length(unsupported)>0L)
     stop("ergmgp cannot simulate under the constraint(s) ",
          paste0("~",unsupported,collapse=", "),".\n",
          "  Supported: dyad-level constraints (blocks, observed, fixedas, fixallbut,\n",
-         "  egocentric, ...) and the degree constraints ",
-         paste0("~",names(EGP_degree_constraints),collapse=", "),".\n",
+         "  egocentric, ...) and the count-preserving constraints ",
+         paste0("~",names(EGP_moveset_constraints),collapse=", "),".\n",
          "  Call EGPConstraintSupport() for the full table.")
-  if(length(degcon)>1L)
-    stop("Only one degree-preserving constraint can be imposed at a time; you gave ",
-         paste0("~",degcon,collapse=", "),".")
+  if(length(cntcon)>1L)
+    stop("Only one count-preserving constraint can be imposed at a time; you gave ",
+         paste0("~",cntcon,collapse=", "),".\n",
+         "  Each of them fixes a different graph statistic and so dictates a different\n",
+         "  move shape; ergmgp has no move set preserving two of them at once.")
 
-  #Degree constraints: check directedness and process compatibility
+  #Count-preserving constraints: check directedness and process compatibility
   family<-EGP_MS_FREE; ntog<-1L; label<-character(0)
-  if(length(degcon)==1L){
-    spec<-EGP_degree_constraints[[degcon]]
-    if(spec$directed && !is.directed(nw))
-      stop("Constraint ~",degcon," applies to directed networks only, but this network ",
-           "is undirected.  For undirected networks use constraints=~degrees, which ",
-           "preserves the full degree sequence.")
-    if(!spec$directed && is.directed(nw))
-      stop("Constraint ~",degcon," applies to undirected networks only, but this network ",
-           "is directed.  For directed networks use ~odegrees or ~idegrees.")
+  if(length(cntcon)==1L){
+    spec<-EGP_moveset_constraints[[cntcon]]
+    #directed=NA means the constraint applies to both kinds of network
+    if(!is.na(spec$directed)){
+      if(spec$directed && !is.directed(nw))
+        stop("Constraint ~",cntcon," applies to directed networks only, but this network ",
+             "is undirected.  For undirected networks use constraints=~degrees, which ",
+             "preserves the full degree sequence.")
+      if(!spec$directed && is.directed(nw))
+        stop("Constraint ~",cntcon," applies to undirected networks only, but this network ",
+             "is directed.  For directed networks use ~odegrees or ~idegrees.")
+    }
     if(!cap$multitog)
-      stop("Process ",proc," cannot be simulated under ~",degcon,".\n",
-           "  ~",degcon," requires each event to toggle ",spec$ntoggles," dyads at once, but ",
-           proc," is a\n  continuum STERGM: a rewire is simultaneously a formation and a ",
+      stop("Process ",proc," cannot be simulated under ~",cntcon,".\n",
+           "  ~",cntcon," requires each event to toggle ",spec$ntoggles," dyads at once, but ",
+           proc," is a\n  continuum STERGM: such a move is simultaneously a formation and a ",
            "dissolution, so the\n  potential difference has no principled split into formation and ",
            "dissolution parts\n  and separability breaks down.  Use LERGM, CI, DS, CRSAOM or CTERGM, ",
            "or restrict\n  yourself to dyad-level constraints.  See EGPConstraintSupport().")
-    family<-spec$family; ntog<-spec$ntoggles; label<-paste0("~",degcon)
+    family<-spec$family; ntog<-spec$ntoggles; label<-paste0("~",cntcon)
   }
 
   #Dyad-level constraints: extract the free dyad set for C.
@@ -243,16 +272,17 @@ EGP_engine<-function(con, proc, engine=c("auto","thinning","enumeration"), verbo
     stop("engine=\"thinning\" is not available for process ",proc,".\n",
          "  Thinning (uniformization) requires the transition rate to be bounded above by a\n",
          "  constant, which holds for LERGM, CI and DS but not for ",proc,".  Use\n",
-         "  engine=\"enumeration\" (exact, but slow for ~degrees) or a different process.")
+         "  engine=\"enumeration\" (exact, but slow for a multi-toggle move set) or a\n",
+         "  different process.")
   #The differential stability rate is A/(|H| exp(pot)), where |H| is the number
   #of legal moves.  For the dyad families |H| is known in closed form, but for
-  #the degree families counting the legal moves is exactly the enumeration we
-  #were trying to avoid, so thinning buys nothing and cannot be made exact.
-  if(proc=="DS" && con$family>=EGP_MS_ODEGREES){
+  #the multi-toggle families counting the legal moves is exactly the enumeration
+  #we were trying to avoid, so thinning buys nothing and cannot be made exact.
+  if(proc=="DS" && con$family>=EGP_MS_MULTITOG){
     if(engine=="thinning")
       stop("engine=\"thinning\" is not available for DS under ",con$label,".\n",
            "  The DS rate is A/(|H| exp(pot)), and |H| is the number of legal moves, which\n",
-           "  for a degree-preserving constraint can only be obtained by enumerating them.\n",
+           "  for a multi-toggle constraint can only be obtained by enumerating them.\n",
            "  Use engine=\"enumeration\" (DS enumerates cheaply: because its rate does not\n",
            "  depend on the move, no change statistics are computed during the sweep).")
     engine<-"enumeration"

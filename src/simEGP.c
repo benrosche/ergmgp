@@ -263,7 +263,8 @@ SEXP simEGP_R(SEXP segp, SEXP mstate, SEXP scoef, SEXP scooffset, SEXP stmax, SE
   MoveSet *ms=MoveSetInit(family, nwp, rledyads);
   /*Log Hamming neighbourhood size.  For the differential stability process this
     is part of the rate, so it must reflect the constrained move set rather than
-    the full dyad space.*/
+    the full dyad space.  The multi-toggle families overwrite this per event
+    with the enumerated move count, which is the only way to get it.*/
   if(family==MS_DYAD)
     lHneigh=log((double)ms->dyads.ndyads);
   else

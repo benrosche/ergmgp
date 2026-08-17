@@ -46,7 +46,7 @@ void MoveSetDestroy(MoveSet *ms){
   edges, and we do not want to be walking a live edge tree while toggling
   it, so we take a copy once per event.*/
 void MoveSetRefresh(MoveSet *ms, Network *nwp){
-  if(ms->family < MS_ODEGREES) return;   /*Dyad families need no snapshot*/
+  if(ms->family < MS_MULTITOG) return;   /*Dyad families need no snapshot*/
   Edge ne = EDGECOUNT(nwp);
   if(ne > ms->elalloc){
     Edge na = (ne < 64) ? 64 : ne * 2;
@@ -89,6 +89,8 @@ double MoveSetSupersetSize(const MoveSet *ms, Network *nwp){
       return ne * n;              /*(edge, node) pairs*/
     case MS_DEGREES:
       return ne * ne * 2.0;       /*(edge, edge, re-pairing) triples*/
+    case MS_EDGES:
+      return ne * n * n;          /*(edge, ordered dyad) pairs*/
   }
   return 0.0;
 }
@@ -145,6 +147,32 @@ Rboolean MoveSetSample(const MoveSet *ms, Network *nwp, Move *mv){
         mv->tails[0] = t; mv->heads[0] = h;
         mv->tails[1] = k; mv->heads[1] = h;
       }
+      mv->isedge = 1;   /*The primary dyad is an edge, by construction*/
+      return TRUE;
+    }
+    case MS_EDGES: {
+      /*One uniform edge to dissolve, plus one uniform dyad to form.  The
+        superset is (edge, ordered dyad), of size ne*n*n; ne is exactly what
+        this constraint holds fixed, so the size does not depend on the state,
+        which is what uniformization requires.
+
+        As in MS_FREE the dyad draw is ordered, and when undirected we *reject*
+        the lower triangle rather than folding it onto the upper one: every
+        legal move must correspond to exactly one superset element, or the
+        total rate comes out inflated.*/
+      if(ne == 0) return FALSE;
+      GetRandEdge(&a1, &a2, nwp);
+      t = 1 + (Vertex)(unif_rand() * ms->n);
+      h = 1 + (Vertex)(unif_rand() * ms->n);
+      if(t == h) return FALSE;
+      if(!ms->directed && t > h) return FALSE;
+      /*The dyad we form must be a non-edge; this also rules out re-forming the
+        edge we just dissolved, which would be a no-op.*/
+      if(IS_OUTEDGE(t, h)) return FALSE;
+      if(!ms_dyadok(ms, a1, a2) || !ms_dyadok(ms, t, h)) return FALSE;
+      mv->ntoggles = 2;
+      mv->tails[0] = a1; mv->heads[0] = a2;   /*Dissolve*/
+      mv->tails[1] = t;  mv->heads[1] = h;    /*Form*/
       mv->isedge = 1;   /*The primary dyad is an edge, by construction*/
       return TRUE;
     }
@@ -246,6 +274,29 @@ Rboolean MoveIterNext(MoveIter *it, Move *mv){
           mv->tails[0] = t; mv->heads[0] = h;
           mv->tails[1] = k; mv->heads[1] = h;
         }
+        mv->isedge = 1;
+        return TRUE;
+      }
+    }
+    case MS_EDGES: {
+      /*Every (edge, non-edge) pair: dissolve the one, form the other.  The
+        move set has E*(D-E) members, so this is as expensive as MS_DEGREES;
+        prefer thinning where the process allows it.*/
+      Dyad ndyad = (Dyad)n * (Dyad)n;
+      while(TRUE){
+        if(it->ei >= ms->nedges){ it->done = 1; return FALSE; }
+        Vertex a1 = ms->eltail[it->ei], a2 = ms->elhead[it->ei];
+        it->d++;
+        if(it->d > ndyad){ it->d = 0; it->ei++; continue; }
+        Vertex t, h;
+        Dyad2TH(&t, &h, it->d, n);
+        if(t == h) continue;
+        if(!ms->directed && t > h) continue;
+        if(IS_OUTEDGE(t, h)) continue;   /*Must form a non-edge*/
+        if(!ms_dyadok(ms, a1, a2) || !ms_dyadok(ms, t, h)) continue;
+        mv->ntoggles = 2;
+        mv->tails[0] = a1; mv->heads[0] = a2;   /*Dissolve*/
+        mv->tails[1] = t;  mv->heads[1] = h;    /*Form*/
         mv->isedge = 1;
         return TRUE;
       }

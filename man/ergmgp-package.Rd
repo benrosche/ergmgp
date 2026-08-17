@@ -7,12 +7,14 @@
 \alias{EGP_engine}
 \alias{EGP_check_dots}
 \alias{EGP_process_caps}
-\alias{EGP_degree_constraints}
+\alias{EGP_moveset_constraints}
 \alias{EGP_MS_FREE}
 \alias{EGP_MS_DYAD}
 \alias{EGP_MS_ODEGREES}
 \alias{EGP_MS_IDEGREES}
 \alias{EGP_MS_DEGREES}
+\alias{EGP_MS_EDGES}
+\alias{EGP_MS_MULTITOG}
 
 \title{Tools for Modeling ERGM Generating Processes}
 

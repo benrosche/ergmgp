@@ -5,14 +5,30 @@
 * `simEGP()` and `simEGPTraj()` gain a `constraints` argument, using `ergm`'s
   formula syntax. Supported: dyad-level constraints (`blocks`, `observed`,
   `fixedas`, `fixallbut`, `egocentric`, and any other constraint exposing a
-  free-dyad set) for every process, and the degree-preserving constraints
-  `~degrees` (undirected), `~odegrees` and `~idegrees` (directed) for every
-  process except the continuum STERGMs.
+  free-dyad set) for every process, and the count-preserving constraints
+  `~edges` (either directedness), `~degrees` (undirected), `~odegrees` and
+  `~idegrees` (directed) for every process except the continuum STERGMs.
 
-  Degree-preserving constraints require an event to toggle several dyads at
-  once (two for a rewire, four for a tetrad), which extends the process class
-  of Butts (2023) rather than just its implementation; see the *Constrained
-  sample spaces* section of `?simEGP`.
+  Count-preserving constraints require an event to toggle several dyads at
+  once (two for an `~edges` swap or a rewire, four for a tetrad), which extends
+  the process class of Butts (2023) rather than just its implementation; see the
+  *Constrained sample spaces* section of `?simEGP`.
+
+* `~edges` holds the total number of ties fixed while leaving the degree
+  distribution free: a move dissolves one edge and forms one non-edge anywhere
+  in the graph, the same move as `ergm`'s `ConstantEdges` proposal. It fills the
+  gap between `~degrees`, which fixes every node's tie budget and so isolates
+  the *composition* of ties, and the unconstrained process, in which volume and
+  composition move together and a rise in any composition statistic is
+  confounded with a rise in the number of ties. `~edges` is the constraint to
+  use when the hypothesis concerns the *concentration* of a fixed volume of ties
+  — whether ties pile up on already-popular nodes — which neither of the others
+  can express.
+
+  Only one count-preserving constraint may be in force, since each dictates a
+  different move shape. `~edges + degrees` is not such a conflict: fixing every
+  degree fixes their sum, and `ergm` drops the redundant term before ergmgp sees
+  it.
 
 * New `EGPConstraintSupport()` prints the full process-by-constraint table,
   saying for each combination whether it is supported, which engine is used,
@@ -48,9 +64,9 @@
 * Unsupported process/constraint combinations raise an error naming the
   process, the constraint, and the reason, rather than being ignored. In
   particular, the continuum STERGMs (`CSTERGM`, `CDCSTERGM`, `CFCSTERGM`)
-  refuse degree-preserving constraints: a rewire is simultaneously a formation
-  and a dissolution, so the potential difference admits no principled split
-  into formation and dissolution parts.
+  refuse count-preserving constraints: every such move is simultaneously a
+  formation and a dissolution, so the potential difference admits no principled
+  split into formation and dissolution parts.
 
 * A constraint that leaves no free dyads is an error rather than a simulation
   in which no event can ever occur.
@@ -69,4 +85,8 @@
 * First test suite for the package (`tests/testthat/`), covering constraint
   invariance, dyad-level restriction, the explicit-error behaviour, agreement
   between the two engines on mean inter-event time, and agreement of the
-  constrained equilibrium with `ergm::simulate(constraints = ~degrees)`.
+  constrained equilibrium with `ergm::simulate()` under both `~degrees` and
+  `~edges`. The `~edges` arm additionally monitors a degree count, which is
+  exactly the marginal `~degrees` pins and `~edges` frees, and so the one a
+  wrong 2-toggle move set could get wrong while still reproducing the model
+  terms.

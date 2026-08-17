@@ -33,13 +33,13 @@
 #
 EGPHazard<-function(form, coef, toggles=NULL, rate.factor=1, process=c("LERGM", "CRSAOM", "CI", "DS", "CDCSTERGM", "CFCSTERGM", "CSTERGM", "CTERGM"), constraints=NULL){
   #Hazards are computed per single-dyad toggle, so they describe the
-  #unconstrained process only.  Under a degree-preserving constraint the events
+  #unconstrained process only.  Under a count-preserving constraint the events
   #are multi-dyad moves and these numbers do not apply; rather than return
   #plausible-looking hazards for a process the caller is not simulating, refuse.
   if(!is.null(constraints))
     stop("EGPHazard() does not yet support constrained processes.\n",
          "  Hazards here are per single-dyad toggle, which is the wrong unit under a\n",
-         "  degree-preserving constraint (where events toggle two or four dyads at once)\n",
+         "  count-preserving constraint (where events toggle two or four dyads at once)\n",
          "  and the wrong support under a dyad-level one.  Returning unconstrained hazards\n",
          "  would silently describe a different process than simEGP(constraints=) simulates.")
   #Set things up

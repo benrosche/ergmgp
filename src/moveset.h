@@ -41,6 +41,11 @@
 #define MS_ODEGREES  2  /*2 toggles sharing a tail*/
 #define MS_IDEGREES  3  /*2 toggles sharing a head*/
 #define MS_DEGREES   4  /*4 toggles (tetrad), undirected*/
+#define MS_EDGES     5  /*2 toggles: one edge out, one non-edge in*/
+
+/*Codes at or above this one are multi-toggle families, for which a single
+  event changes more than one edge variable.*/
+#define MS_MULTITOG  MS_ODEGREES
 
 #define MOVE_MAXTOG  4
 
@@ -69,9 +74,9 @@ typedef struct {
 typedef struct {
   const MoveSet *ms;
   Network *nwp;
-  Dyad d;          /*MS_FREE/MS_DYAD: current dyad index*/
+  Dyad d;          /*MS_FREE/MS_DYAD/MS_EDGES: current dyad index*/
   RLERun hint;     /*MS_DYAD: run hint for NextRLEBDM1D*/
-  Edge ei, ej;     /*Degree families: indices into the edge snapshot*/
+  Edge ei, ej;     /*Degree and edge families: indices into the edge snapshot*/
   Vertex k;        /*Rewire families: the third node*/
   int variant;     /*MS_DEGREES: which of the two re-pairings*/
   int done;

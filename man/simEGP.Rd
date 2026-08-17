@@ -55,7 +55,7 @@ optionally, an initial offset to the step or event count for the start of a traj
 the ERGM generating process to use (described below).
 }
   \item{constraints}{
-optionally, a one-sided formula restricting the sample space, using the same syntax as \code{\link[ergm]{ergm}}.  Not every combination of process and constraint is supported; see \sQuote{Constrained sample spaces} below, and \code{\link{EGPConstraintSupport}} for the full table.  Unsupported combinations raise an error rather than being silently ignored.
+optionally, a one-sided formula restricting the sample space, using the same syntax as \code{\link[ergm]{ergm}}: any dyad-level constraint, or one of \code{~edges}, \code{~degrees}, \code{~odegrees}, \code{~idegrees}.  Not every combination of process and constraint is supported; see \sQuote{Constrained sample spaces} below, and \code{\link{EGPConstraintSupport}} for the full table.  Unsupported combinations raise an error rather than being silently ignored.
 }
   \item{engine}{
 how to simulate the constrained process: \code{"thinning"} (exact uniformization; one change-statistic evaluation per candidate move), \code{"enumeration"} (walk the whole move set at every event), or \code{"auto"} (the default: thinning wherever the process admits it).  Both are exact; they differ only in cost.  See \sQuote{Constrained sample spaces}.
@@ -123,16 +123,26 @@ Supplying \code{constraints} restricts the process to a subset of the graph spac
 
 The unconstrained processes of Butts (2023) move by toggling a single dyad.  Under a dyad-level constraint (\code{blocks}, \code{observed}, \code{fixedas}, \code{fixallbut}, \code{egocentric}, and combinations) that is still true -- the fixed dyads are simply removed from consideration -- so those constraints are supported for every process.
 
-Under a degree-preserving constraint no single toggle is legal at all, since every toggle changes a degree.  A move therefore has to become a \emph{set} of simultaneous toggles: two for \code{~odegrees} and \code{~idegrees} (rewiring an edge while holding one endpoint fixed), and four for \code{~degrees} (the tetrad or double-edge swap, mirroring \code{ergm}'s \code{CondDegreeTetrad} proposal).  The resulting process has the constrained ERGM as its equilibrium provided the rate function satisfies the usual detailed-balance form applied to the potential difference of the whole move, and the move graph is symmetric and connected on the constrained space.  This is an extension of the model class, not just of the implementation.
+The \emph{count-preserving} constraints are different: under \code{~edges} or a degree constraint no single toggle is legal at all, since every toggle changes the edge count and both its endpoints' degrees.  A move therefore has to become a \emph{set} of simultaneous toggles.  ergmgp implements three shapes:
+\describe{
+  \item{\code{~edges}}{two toggles: dissolve one edge, form one non-edge, anywhere in the graph.  The edge count is held fixed and the degree distribution is free to move.  Available for directed and undirected networks.  This is the same move as \code{ergm}'s \code{ConstantEdges} proposal.}
+  \item{\code{~odegrees}, \code{~idegrees}}{two toggles: rewire an edge while holding one endpoint fixed.  Directed networks only.}
+  \item{\code{~degrees}}{four toggles: the tetrad or double-edge swap, mirroring \code{ergm}'s \code{CondDegreeTetrad} proposal.  Undirected networks only.}
+}
+At most one count-preserving constraint can be in force, since each dictates a different move shape; combining two is an error.  (\code{~edges + degrees} is not such a case: \code{~degrees} fixes every degree and hence their sum, and \code{ergm} drops the redundant term before ergmgp sees it.)
 
-The continuum STERGMs (\code{CSTERGM}, \code{CDCSTERGM}, \code{CFCSTERGM}) cannot be extended this way: a rewire is simultaneously a formation and a dissolution, so the potential difference admits no principled split into formation and dissolution parts and separability breaks down.  Requesting a degree constraint for these processes is an error.
+The resulting process has the constrained ERGM as its equilibrium provided the rate function satisfies the usual detailed-balance form applied to the potential difference of the whole move, and the move graph is symmetric and connected on the constrained space.  This is an extension of the model class, not just of the implementation.
+
+Which of these to use is a modelling decision and not an innocuous one.  \code{~degrees} says each node has a fixed tie budget, so only the \emph{composition} of ties can change; the unconstrained process lets volume and composition move together, so a rise in any composition statistic is confounded with a rise in the number of ties; \code{~edges} sits between them, fixing total volume while allowing ties to redistribute across nodes -- the constraint to use when the hypothesis is about \emph{concentration} rather than composition.
+
+The continuum STERGMs (\code{CSTERGM}, \code{CDCSTERGM}, \code{CFCSTERGM}) cannot be extended this way: any of these moves is simultaneously a formation and a dissolution, so the potential difference admits no principled split into formation and dissolution parts and separability breaks down.  Requesting a count-preserving constraint for these processes is an error.
 
 Two exact engines are available, differing only in cost:
 \describe{
-  \item{\code{"enumeration"}}{walks the whole legal move set at each event, exactly as the unconstrained algorithm walks all dyads.  Works for every process, but the move set has \eqn{O(E^2)} members under \code{~degrees}, and multi-toggle change statistics must be obtained by applying and rolling back the toggles (terms such as \code{gwesp} supply no joint change statistic), so this is one to two orders of magnitude slower than the unconstrained case.}
+  \item{\code{"enumeration"}}{walks the whole legal move set at each event, exactly as the unconstrained algorithm walks all dyads.  Works for every process, but the move set has \eqn{O(E^2)} members under \code{~degrees} and \eqn{E(D-E)} under \code{~edges}, and multi-toggle change statistics must be obtained by applying and rolling back the toggles (terms such as \code{gwesp} supply no joint change statistic), so this is one to two orders of magnitude slower than the unconstrained case.}
   \item{\code{"thinning"}}{uniformization.  Where the transition rate is bounded above by a constant \eqn{\Lambda} -- true for \code{LERGM} and \code{CI} (\eqn{\Lambda = A}), and trivially for \code{DS}, whose rate does not depend on the move -- candidates are drawn uniformly from a fixed superset of the move set, and accepted with probability \eqn{rate/\Lambda}.  Rejections are self-loops: time advances, the state does not.  This is \emph{exact}, not an approximation, and costs one change-statistic evaluation per candidate instead of one per member of the move set.  It is the default wherever it applies.}
 }
-\code{DS} under a degree constraint is restricted to enumeration, because its rate involves the size of the move set, which can only be obtained by enumerating it; enumeration is cheap for \code{DS} since no change statistics are needed during the sweep.
+\code{DS} under a count-preserving constraint is restricted to enumeration, because its rate involves the size of the move set, which can only be obtained by enumerating it; enumeration is cheap for \code{DS} since no change statistics are needed during the sweep.
 
 The realised constraint and engine are recorded on the returned network as the \code{"Constraint"} and \code{"Engine"} attributes; for the thinning engine, \code{"Acceptance"} gives the fraction of candidates accepted.  A low acceptance rate costs speed but never correctness.
 

@@ -8,6 +8,11 @@
 #    twice by the sampler, doubling the total rate); and
 #  - "the constrained equilibrium matches ergm::simulate", which is what would
 #    catch a mistake in the multi-toggle change statistics.
+#
+#Both are run against ~degrees and ~edges.  Under ~edges the equilibrium check
+#also monitors a degree count, which is the marginal ~degrees pins and ~edges
+#frees -- so it is the one a wrong 2-toggle move set could get wrong while still
+#reproducing the model terms.
 
 undirected_net <- function(n = 14, nedge = 28, seed = 42){
   set.seed(seed)
@@ -58,15 +63,23 @@ test_that("unsupported process/constraint combinations are refused explicitly", 
                       constraints = ~blocks(attr = "sex", levels2 = TRUE),
                       verbose = FALSE),
                "no free dyads")
-  #Constraints we cannot turn into a move set
+  #Constraints we cannot turn into a move set.  (~degreedist fixes the degree
+  #*distribution* rather than the degree sequence, so no fixed-shape move set
+  #preserves it; it exposes no free-dyad set either.)
   expect_error(simEGP(f, coef = c(-2, .4), events = 5, process = "LERGM",
-                      constraints = ~edges, verbose = FALSE),
+                      constraints = ~degreedist, verbose = FALSE),
                "cannot simulate under the constraint")
+  #Only one count-preserving constraint at a time
+  expect_error(simEGP(directed_net() ~ edges + mutual, coef = c(-1, .5), events = 5,
+                      process = "LERGM", constraints = ~odegrees + idegrees,
+                      verbose = FALSE),
+               "Only one count-preserving constraint")
   #Thinning needs a bounded rate
   expect_error(simEGP(f, coef = c(-2, .4), events = 5, process = "CTERGM",
                       constraints = ~degrees, engine = "thinning", verbose = FALSE),
                "not available for process")
-  #DS needs the move count, so it cannot be thinned under a degree constraint
+  #DS needs the move count, so it cannot be thinned under a count-preserving
+  #constraint
   expect_error(simEGP(f, coef = c(-2, .4), events = 5, process = "DS",
                       constraints = ~degrees, engine = "thinning", verbose = FALSE),
                "not available for DS")
@@ -100,6 +113,53 @@ test_that("degree-preserving constraints preserve exactly what they claim", {
 })
 
 
+test_that("~edges fixes the edge count and frees the degree sequence", {
+  #This is the whole point of the constraint: it sits between ~degrees (which
+  #forbids any change to the degree distribution) and the unconstrained process
+  #(which lets volume and composition move together).  So the test has to check
+  #both halves -- that the count is held, *and* that the degree sequence is not.
+  nw <- undirected_net()
+  f <- nw ~ gwesp(0.3, fixed = TRUE) + nodematch("sex")
+  d0 <- summary(nw ~ degree(0:12)); e0 <- summary(nw ~ edges)
+  for(eng in c("thinning", "enumeration")){
+    s <- simEGP(f, coef = c(0.6, 0.5), events = 200, process = "LERGM",
+                constraints = ~edges, engine = eng, verbose = FALSE)
+    expect_identical(summary(s ~ edges), e0, info = eng)
+    expect_false(identical(summary(s ~ degree(0:12)), d0), info = eng)
+    expect_equal(s %n% "Engine", eng)
+    expect_equal(s %n% "Constraint", "~edges")
+  }
+  #Unlike the degree constraints, ~edges applies to directed networks too
+  nd <- directed_net()
+  s <- simEGP(nd ~ edges + mutual, coef = c(-1.5, .5), events = 300,
+              process = "LERGM", constraints = ~edges, verbose = FALSE)
+  expect_identical(summary(s ~ edges), summary(nd ~ edges))
+  expect_false(identical(summary(s ~ odegree(0:10)), summary(nd ~ odegree(0:10))))
+  #ergm resolves the implication for us: ~degrees fixes every degree and so
+  #fixes their sum, and ergm_conlist() drops the redundant ~edges.  Adding it
+  #should therefore be a no-op rather than a conflict.
+  s <- simEGP(f, coef = c(0.6, 0.5), events = 50, process = "LERGM",
+              constraints = ~edges + degrees, verbose = FALSE)
+  expect_equal(s %n% "Constraint", "~degrees")
+  expect_identical(summary(s ~ degree(0:12)), d0)
+})
+
+
+test_that("under ~edges every event is one removal and one addition", {
+  #The move is a 2-toggle swap, so the event history must come in balanced
+  #pairs sharing a timestamp.  extract_stats()-style analyses depend on this.
+  nw <- undirected_net()
+  f <- nw ~ gwesp(0.3, fixed = TRUE) + nodematch("sex")
+  s <- simEGP(f, coef = c(0.6, 0.5), events = 40, process = "LERGM",
+              constraints = ~edges, return.history = TRUE, verbose = FALSE)
+  eh <- s %n% "EventHistory"
+  expect_equal(nrow(eh), 2 * (s %n% "Events"))
+  expect_equal(sum(eh[, "Onset"] == 1), sum(eh[, "Onset"] == 0))
+  expect_true(all(tapply(eh[, "Onset"], eh[, "Time"],
+                         function(x) length(x) == 2L && sum(x) == 1)))
+})
+
+
 test_that("dyad-level constraints toggle only free dyads", {
   set.seed(9)
   nw <- undirected_net()
@@ -126,15 +186,17 @@ test_that("the two engines agree on the mean inter-event time", {
   nw <- undirected_net()
   f <- nw ~ gwesp(0.3, fixed = TRUE) + nodematch("sex")
   reps <- 120; ev <- 100
-  mit <- function(eng){
+  mit <- function(eng, con){
     set.seed(3)
     mean(vapply(1:reps, function(i)
       simEGP(f, coef = c(0.6, 0.5), events = ev, process = "LERGM",
-             constraints = ~degrees, engine = eng, verbose = FALSE) %n% "Time",
+             constraints = con, engine = eng, verbose = FALSE) %n% "Time",
       numeric(1))) / ev
   }
-  a <- mit("thinning"); b <- mit("enumeration")
-  expect_equal(a / b, 1, tolerance = 0.06)
+  for(con in list(~degrees, ~edges)){
+    a <- mit("thinning", con); b <- mit("enumeration", con)
+    expect_equal(a / b, 1, tolerance = 0.06, label = deparse(con))
+  }
 })
 
 
@@ -146,18 +208,28 @@ test_that("the constrained equilibrium matches ergm::simulate", {
   nw <- undirected_net()
   co <- c(0.6, 0.5)
   f <- nw ~ gwesp(0.3, fixed = TRUE) + nodematch("sex")
-  mono <- function(x) summary(x ~ gwesp(0.3, fixed = TRUE) + nodematch("sex"))
   reps <- 250
-  set.seed(7)
-  A <- t(vapply(1:reps, function(i)
-    mono(simEGP(f, coef = co, events = 4000, process = "LERGM",
-                constraints = ~degrees, verbose = FALSE)), numeric(2)))
-  set.seed(11)
-  B <- t(vapply(1:reps, function(i)
-    mono(simulate(f, coef = co, constraints = ~degrees, nsim = 1,
-                  control = control.simulate.formula(MCMC.burnin = 20000),
-                  output = "network")), numeric(2)))
-  se <- sqrt(apply(A, 2, var)/reps + apply(B, 2, var)/reps)
-  z <- (colMeans(A) - colMeans(B)) / se
-  expect_lt(max(abs(z)), 4)
+  #For ~edges we also monitor a degree count.  That is precisely the marginal
+  #~degrees pins and ~edges frees, so it is the one a wrong 2-toggle move set
+  #would get wrong while still reproducing the model terms.  It is degenerate
+  #under ~degrees, so it cannot be monitored there.
+  cases <- list(list(con = ~degrees, mon = "gwesp(0.3, fixed = TRUE) + nodematch(\"sex\")"),
+                list(con = ~edges,   mon = "gwesp(0.3, fixed = TRUE) + nodematch(\"sex\") + degree(2)"))
+  for(cs in cases){
+    mono <- function(x) summary(as.formula(paste("x ~", cs$mon)))
+    k <- length(mono(nw))
+    set.seed(7)
+    A <- t(vapply(1:reps, function(i)
+      mono(simEGP(f, coef = co, events = 4000, process = "LERGM",
+                  constraints = cs$con, verbose = FALSE)), numeric(k)))
+    set.seed(11)
+    B <- t(vapply(1:reps, function(i)
+      mono(suppressMessages(
+        simulate(f, coef = co, constraints = cs$con, nsim = 1,
+                 control = control.simulate.formula(MCMC.burnin = 20000),
+                 output = "network"))), numeric(k)))
+    se <- sqrt(apply(A, 2, var)/reps + apply(B, 2, var)/reps)
+    z <- (colMeans(A) - colMeans(B)) / se
+    expect_lt(max(abs(z)), 4, label = deparse(cs$con))
+  }
 })
